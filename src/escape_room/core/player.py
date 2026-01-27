@@ -69,6 +69,17 @@ class Player(pygame.sprite.Sprite):
         self.hitbox = pygame.Rect(0, 0, 20 * self.scale, 14 * self.scale)
         self._sync_hitbox_to_pos()
 
+        self._ray_timer = 0.0
+        self._ray_period = 1.0 / 15.0   # 15 Hz ray update (smooth enough)
+        self._last_ray_pos = pygame.Vector2(self.pos)
+        self._last_ray_dir = self.direction
+
+        self.ray_sensor = RaySensor180(
+                n_rays=41,
+                max_dist=220,
+                fov_deg=180
+            )
+
 
 
     def _build_scaled_anim_cache(self):
@@ -164,7 +175,23 @@ class Player(pygame.sprite.Sprite):
                         self.hitbox.top = r.bottom
             self.pos.y = self.hitbox.bottom  # feet = bottom of hitbox
 
-    def update(self, dt, keys, obstacles=None):
+
+
+    def _direction_to_angle_rad(self, direction: str) -> float:
+        # 0 rad = facing right (pygame +x). Positive is clockwise? (we’ll follow standard)
+        if direction == "right":
+            return 0.0
+        if direction == "down":
+            return math.pi / 2
+        if direction == "left":
+            return math.pi
+        if direction == "up":
+            return -math.pi / 2
+        return 0.0
+
+
+
+    def update(self, dt, keys, obstacles=None, grid=None):
         """
         dt: seconds
         obstacles: list[pygame.Rect] from TMX object layer "obstacle"
@@ -198,6 +225,33 @@ class Player(pygame.sprite.Sprite):
         self.image = self._get_scaled_frame()
         self._sync_rect_to_pos()
         self._sync_hitbox_to_pos()
+
+        self._ray_timer += dt
+
+        moved  = (self.pos - self._last_ray_pos).length_squared() > 1.0
+        turned = (self.direction != self._last_ray_dir)
+
+        if (moved or turned) and (self._ray_timer >= self._ray_period):
+            self._ray_timer = 0.0
+            self._last_ray_pos.update(self.pos)
+            self._last_ray_dir = self.direction
+
+            # ✅ ONLY update rays here
+            facing_rad = self._direction_to_angle_rad(self.direction)
+            if grid is not None:
+                max_dist = self.ray_sensor.max_dist
+                sense_rect = pygame.Rect(
+                    int(self.pos.x - max_dist), int(self.pos.y - max_dist),
+                    int(max_dist * 2), int(max_dist * 2)
+                )
+                nearby = grid.query_rect(sense_rect)
+            else:
+                nearby = obstacles
+
+            self.ray_sensor.update(self.pos, facing_rad, nearby)
+
+
+
 
     def draw(self, surface):
         surface.blit(self.image, self.rect.topleft)

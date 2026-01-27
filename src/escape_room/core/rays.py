@@ -107,6 +107,17 @@ class RaySensor180:
         if self.n_rays < 1:
             self.n_rays = 1
 
+        # ✅ define fov_rad first
+        self.fov_rad = math.radians(self.fov_deg)
+        half = 0.5 * self.fov_rad
+
+        # ✅ offsets across [-half, +half]
+        if self.n_rays == 1:
+            self.offsets = [0.0]
+        else:
+            step = self.fov_rad / float(self.n_rays - 1)
+            self.offsets = [(-half + i * step) for i in range(self.n_rays)]
+
         self.rays = [Ray(max_dist=self.max_dist) for _ in range(self.n_rays)]
 
         # outputs (easy to feed into RL later)
@@ -114,35 +125,43 @@ class RaySensor180:
         self.hit_points = [pygame.Vector2(0, 0) for _ in range(self.n_rays)]
         self.hits = [False for _ in range(self.n_rays)]
 
+
+    
     def update(self, origin: pygame.Vector2, facing_angle_rad: float, obstacles):
         """
         origin: Vector2 (sensor position)
         facing_angle_rad: radians (where the player is looking)
-        obstacles: list of pygame.Rect
+        obstacles: list[pygame.Rect]
         """
-        origin = pygame.Vector2(origin)
-        facing = float(facing_angle_rad)
+        ox = float(origin.x)
+        oy = float(origin.y)
+        base = float(facing_angle_rad)
 
-        # spread rays across FOV centered on facing angle
-        fov_rad = math.radians(self.fov_deg)
-        half = 0.5 * fov_rad
-
-        if self.n_rays == 1:
-            angles = [facing]
-        else:
-            step = fov_rad / float(self.n_rays - 1)
-            angles = [facing - half + i * step for i in range(self.n_rays)]
-
-        for i, a in enumerate(angles):
+        # loop rays using precomputed offsets
+        for i, off in enumerate(self.offsets):
+            a = base + off
             ray = self.rays[i]
-            ray.set(origin, a)
+
+            # avoid creating new Vector2 each ray
+            ray.origin.x = ox
+            ray.origin.y = oy
+            ray.angle = _clamp_angle_pi(a)
+
             hit, pt, dist = ray.cast_to_rects(obstacles)
 
             self.hits[i] = hit
-            self.hit_points[i] = pygame.Vector2(pt)
+            # pt might already be Vector2; if it's tuple, assign without new Vector2
+            if isinstance(pt, pygame.Vector2):
+                self.hit_points[i].x = pt.x
+                self.hit_points[i].y = pt.y
+            else:
+                self.hit_points[i].x = pt[0]
+                self.hit_points[i].y = pt[1]
+
             self.distances[i] = float(dist)
 
         return self.distances
+
 
     def draw(self, surface, color=(255, 255, 0), hit_color=(255, 80, 80)):
         """
