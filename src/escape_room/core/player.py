@@ -1,7 +1,8 @@
+import math
 import pygame
 from src.escape_room.utils.animations import SpriteSheet
 from src.escape_room.constants import *
-
+from src.escape_room.core.rays import RaySensor180
 
 
 
@@ -30,13 +31,8 @@ def load_player_animations(
     return anim
 
 
-class Player(pygame.sprite.Sprite):
-    """
-    Modular player sprite:
-    - update(dt, keys) handles movement + animation
-    - draw(surface) draws with feet anchored on self.pos
-    """
 
+class Player(pygame.sprite.Sprite):
     def __init__(
         self,
         pos,
@@ -50,11 +46,13 @@ class Player(pygame.sprite.Sprite):
 
         self.anim = animations
         self.scale = scale
+        self.anim_scaled = self._build_scaled_anim_cache()
+
 
         self.walk_speed = float(walk_speed)
         self.run_speed = float(run_speed)
 
-        self.pos = pygame.Vector2(pos)
+        self.pos = pygame.Vector2(pos)  # this is the FEET position (midbottom)
         self.vel = pygame.Vector2(0, 0)
 
         self.direction = start_direction
@@ -63,18 +61,38 @@ class Player(pygame.sprite.Sprite):
         self.frame_index = 0
         self.timer = 0.0
 
-        # init image/rect so Sprite groups can use it
         self.image = self._get_scaled_frame()
         self.rect = self.image.get_rect()
         self._sync_rect_to_pos()
 
-    def handle_input(self, keys):
-        """
-        Returns:
-            move_vec (Vector2), running (bool)
-        """
-        move = pygame.Vector2(0, 0)
+        # --- collision hitbox (smaller than sprite) ---
+        self.hitbox = pygame.Rect(0, 0, 20 * self.scale, 14 * self.scale)
+        self._sync_hitbox_to_pos()
 
+
+
+    def _build_scaled_anim_cache(self):
+        """Pre-scale all frames once. Huge speed-up."""
+        if self.scale == 1:
+            return self.anim  # no need
+
+        scaled = {"idle": {}, "walk": {}, "run": {}}
+        for state in self.anim:
+            for d in self.anim[state]:
+                scaled[state][d] = []
+                for frame in self.anim[state][d]:
+                    scaled[state][d].append(
+                        pygame.transform.scale(
+                            frame,
+                            (FRAME_W * self.scale, FRAME_H * 2 * self.scale)
+                        )
+                    )
+        return scaled
+
+
+
+    def handle_input(self, keys):
+        move = pygame.Vector2(0, 0)
         if keys[pygame.K_LEFT] or keys[pygame.K_a]:
             move.x -= 1
         if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
@@ -83,12 +101,10 @@ class Player(pygame.sprite.Sprite):
             move.y -= 1
         if keys[pygame.K_DOWN] or keys[pygame.K_s]:
             move.y += 1
-
         running = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
         return move, running
 
     def _choose_direction(self, move):
-        # 4-dir by dominant axis
         if abs(move.x) > abs(move.y):
             return "right" if move.x > 0 else "left"
         else:
@@ -103,7 +119,6 @@ class Player(pygame.sprite.Sprite):
     def _advance_animation(self, dt):
         fps = ANIM_FPS[self.state]
         frames = self.anim[self.state][self.direction]
-
         self.timer += dt
         step = 1.0 / float(fps)
         while self.timer >= step:
@@ -111,24 +126,52 @@ class Player(pygame.sprite.Sprite):
             self.frame_index = (self.frame_index + 1) % len(frames)
 
     def _get_scaled_frame(self):
-        frame = self.anim[self.state][self.direction][self.frame_index]  # 48x96
-        if self.scale == 1:
-            return frame
-        return pygame.transform.scale(frame, (FRAME_W * self.scale, FRAME_H * 2 * self.scale))
+        return self.anim_scaled[self.state][self.direction][self.frame_index]
+
 
     def _sync_rect_to_pos(self):
-        """
-        Put 'feet' at self.pos:
-        rect.midbottom = (pos.x, pos.y)
-        """
-        self.rect = self.image.get_rect()
         self.rect.midbottom = (int(self.pos.x), int(self.pos.y))
 
-    def update(self, dt, keys):
+
+    def _sync_hitbox_to_pos(self):
+        # hitbox also uses "feet anchor"
+        self.hitbox.midbottom = (int(self.pos.x), int(self.pos.y))
+
+    def _resolve_collisions(self, obstacles, dx, dy):
         """
-        dt: seconds (float)
-        keys: pygame.key.get_pressed()
+        Push hitbox out of obstacles and update self.pos accordingly.
         """
+        if not obstacles:
+            return
+
+        # X axis resolution
+        if dx != 0:
+            for r in obstacles:
+                if self.hitbox.colliderect(r):
+                    if dx > 0:
+                        self.hitbox.right = r.left
+                    else:
+                        self.hitbox.left = r.right
+            self.pos.x = self.hitbox.centerx  # keep feet x aligned
+
+        # Y axis resolution
+        if dy != 0:
+            for r in obstacles:
+                if self.hitbox.colliderect(r):
+                    if dy > 0:
+                        self.hitbox.bottom = r.top
+                    else:
+                        self.hitbox.top = r.bottom
+            self.pos.y = self.hitbox.bottom  # feet = bottom of hitbox
+
+    def update(self, dt, keys, obstacles=None):
+        """
+        dt: seconds
+        obstacles: list[pygame.Rect] from TMX object layer "obstacle"
+        """
+        if obstacles is None:
+            obstacles = []
+
         move, running = self.handle_input(keys)
         moving = move.length_squared() > 0
 
@@ -136,13 +179,27 @@ class Player(pygame.sprite.Sprite):
             self.direction = self._choose_direction(move)
             move = move.normalize()
             speed = self.run_speed if running else self.walk_speed
-            self.pos += move * speed * dt
+
+            dx = move.x * speed * dt
+            dy = move.y * speed * dt
+
+            # --- move + collide (separate axes) ---
+            self.pos.x += dx
+            self._sync_hitbox_to_pos()
+            self._resolve_collisions(obstacles, dx=dx, dy=0)
+
+            self.pos.y += dy
+            self._sync_hitbox_to_pos()
+            self._resolve_collisions(obstacles, dx=0, dy=dy)
 
         self._set_state(moving, running)
         self._advance_animation(dt)
 
         self.image = self._get_scaled_frame()
         self._sync_rect_to_pos()
+        self._sync_hitbox_to_pos()
 
     def draw(self, surface):
         surface.blit(self.image, self.rect.topleft)
+        # debug hitbox (optional)
+        # pygame.draw.rect(surface, (255,0,0), self.hitbox, 1)
