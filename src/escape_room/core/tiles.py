@@ -10,6 +10,83 @@ FLIP_D = 0x20000000
 GID_MASK = ~(FLIP_H | FLIP_V | FLIP_D)
 
 
+
+def load_obstacle_rects_from_tmx(tmx_path: str, layer_name: str = "obstacle"):
+    """
+    Reads a TMX and returns pygame.Rect list from an Object Layer (objectgroup).
+    This uses the object's x,y,width,height (rect objects).
+    """
+    tmx_path = str(Path(tmx_path))
+    tree = ET.parse(tmx_path)
+    root = tree.getroot()
+
+    rects = []
+    for obj_group in root.findall("objectgroup"):
+        if obj_group.attrib.get("name") != layer_name:
+            continue
+
+        for obj in obj_group.findall("object"):
+            x = float(obj.attrib.get("x", 0))
+            y = float(obj.attrib.get("y", 0))
+            w = float(obj.attrib.get("width", 0))
+            h = float(obj.attrib.get("height", 0))
+
+            # ignore non-rect objects
+            if w <= 0 or h <= 0:
+                continue
+
+            rects.append(pygame.Rect(int(x), int(y), int(w), int(h)))
+
+    return rects
+
+
+def _obj_to_rect(o: dict) -> pygame.Rect:
+    # Tiled object: x,y is top-left in pixels
+    x = int(o.get("x", 0))
+    y = int(o.get("y", 0))
+    w = int(o.get("width", 0))
+    h = int(o.get("height", 0))
+    return pygame.Rect(x, y, w, h)
+
+
+def extract_collision_from_tmj(tmj: dict):
+    """
+    Reads Tiled object layers:
+      - layer name "Walls"  => solid rects
+      - layer name "Doors"  => door rects (can be opened/locked)
+    Returns:
+      wall_rects: list[pygame.Rect]
+      doors: list[dict]  { "rect": Rect, "name": str, "open": bool, "locked": bool }
+    """
+    wall_rects = []
+    doors = []
+
+    for layer in tmj.get("layers", []):
+        if layer.get("type") != "objectgroup":
+            continue
+
+        lname = (layer.get("name") or "").strip().lower()
+        objects = layer.get("objects", [])
+
+        if lname == "walls":
+            for o in objects:
+                wall_rects.append(_obj_to_rect(o))
+
+        elif lname == "doors":
+            for o in objects:
+                rect = _obj_to_rect(o)
+                props = {p["name"]: p.get("value") for p in o.get("properties", [])} if o.get("properties") else {}
+                doors.append({
+                    "rect": rect,
+                    "name": str(o.get("name", "")),
+                    "open": bool(props.get("open", False)),
+                    "locked": bool(props.get("locked", False)),
+                })
+
+    return wall_rects, doors
+
+
+
 def load_json(path: Path):
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
@@ -111,6 +188,8 @@ class TiledMap:
         self.height = self.data["height"]
         self.tile_w = self.data["tilewidth"]
         self.tile_h = self.data["tileheight"]
+        self._static_world = None   # cache surface
+        self._static_dirty = True   # if map changes later, set True
 
         # layers
         self.layers = [ly for ly in self.data["layers"] if ly["type"] == "tilelayer"]
@@ -163,6 +242,38 @@ class TiledMap:
                                            y * self.tile_h - camera_y))
 
 
+    def build_static_world(self):
+        """Render the full map once into a surface."""
+        world_w = self.width * self.tile_w
+        world_h = self.height * self.tile_h
+        surf = pygame.Surface((world_w, world_h), pygame.SRCALPHA)
+
+        # draw all layers ONCE
+        for layer in self.layers:
+            data = layer["data"]
+            for y in range(self.height):
+                row_off = y * self.width
+                py = y * self.tile_h
+                for x in range(self.width):
+                    raw_gid = data[row_off + x]
+                    if raw_gid == 0:
+                        continue
+                    gid = raw_gid & GID_MASK
+                    ts = self._find_tileset(gid)
+                    if ts is None:
+                        continue
+                    tile = ts.get_tile_surface(raw_gid)
+                    if tile:
+                        surf.blit(tile, (x * self.tile_w, py))
+
+        self._static_world = surf
+        self._static_dirty = False
+
+    def draw_cached(self, screen: pygame.Surface, camera_x=0, camera_y=0):
+        """Fast draw: just blit the cached full-map surface."""
+        if self._static_world is None or self._static_dirty:
+            self.build_static_world()
+        screen.blit(self._static_world, (-camera_x, -camera_y))
 
 
 def blit_fit(screen, world_surf):
