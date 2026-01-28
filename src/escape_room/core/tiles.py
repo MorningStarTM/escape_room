@@ -193,6 +193,9 @@ class TiledMap:
 
         # layers
         self.layers = [ly for ly in self.data["layers"] if ly["type"] == "tilelayer"]
+        self.tile_layers = [ly for ly in self.data["layers"] if ly["type"] == "tilelayer"]
+        self.object_layers = [ly for ly in self.data["layers"] if ly["type"] == "objectgroup"]
+
 
         # tilesets (multiple)
         self.tilesets = []
@@ -211,6 +214,18 @@ class TiledMap:
         # We'll assume 16x16 like your tmj.
         # (If mismatch happens, tell me — we’ll adapt.)
 
+    def get_tile_layer_by_name(self, name: str):
+        for ly in self.tile_layers:
+            if ly.get("name") == name:
+                return ly
+        return None
+
+    def get_object_layer_by_name(self, name: str):
+        for ly in self.object_layers:
+            if ly.get("name") == name:
+                return ly
+        return None
+
     def _find_tileset(self, gid_without_flags: int):
         # choose the tileset with the highest firstgid <= gid
         chosen = None
@@ -221,12 +236,23 @@ class TiledMap:
                 break
         return chosen
 
-    def draw(self, screen: pygame.Surface, camera_x=0, camera_y=0):
-        for layer in self.layers:
-            data = layer["data"]  # your tmj shows it's already a list ✅
+    def draw(self, screen: pygame.Surface, camera_x=0, camera_y=0, skip_cells_by_layer=None):
+        """
+        skip_cells_by_layer: dict[layer_name] -> set[(tx, ty)]
+        """
+        skip_cells_by_layer = skip_cells_by_layer or {}
+
+        for layer in self.tile_layers:
+            data = layer["data"]
+            lname = layer.get("name", "")
+
+            skip = skip_cells_by_layer.get(lname, set())
 
             for y in range(self.height):
                 for x in range(self.width):
+                    if (x, y) in skip:
+                        continue
+
                     raw_gid = data[y * self.width + x]
                     if raw_gid == 0:
                         continue
@@ -239,7 +265,8 @@ class TiledMap:
                     tile = ts.get_tile_surface(raw_gid)
                     if tile:
                         screen.blit(tile, (x * self.tile_w - camera_x,
-                                           y * self.tile_h - camera_y))
+                                        y * self.tile_h - camera_y))
+
 
 
     def build_static_world(self):
@@ -274,6 +301,33 @@ class TiledMap:
         if self._static_world is None or self._static_dirty:
             self.build_static_world()
         screen.blit(self._static_world, (-camera_x, -camera_y))
+
+
+    def draw_tile_layer(self, screen, layer_name: str, camera_x=0, camera_y=0, skip_cells=None):
+        layer = self.get_tile_layer_by_name(layer_name)
+        if not layer:
+            return
+
+        skip_cells = skip_cells or set()
+        data = layer["data"]
+
+        for y in range(self.height):
+            for x in range(self.width):
+                if (x, y) in skip_cells:
+                    continue
+
+                raw_gid = data[y * self.width + x]
+                if raw_gid == 0:
+                    continue
+
+                gid = raw_gid & GID_MASK
+                ts = self._find_tileset(gid)
+                if ts is None:
+                    continue
+
+                tile = ts.get_tile_surface(raw_gid)
+                if tile:
+                    screen.blit(tile, (x * self.tile_w - camera_x, y * self.tile_h - camera_y))
 
 
 def blit_fit(screen, world_surf):
