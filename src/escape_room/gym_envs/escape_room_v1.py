@@ -1,0 +1,602 @@
+# src/escape_room/gym_envs/escape_room_env.py
+from __future__ import annotations
+
+import sys
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from typing import Optional, Dict, Any, Tuple, List, Set
+import math
+import numpy as np
+import pygame
+import gymnasium as gym
+from gymnasium import spaces
+
+from src.escape_room.core.tiles import TiledMap, load_obstacle_rects_from_tmx
+from src.escape_room.core.player import Player, load_player_animations
+from src.escape_room.core.spatial_hash import SpatialHash
+from src.escape_room.core.doors import build_doors_from_tmx
+from src.escape_room.core.rays import RaySensor180
+
+from src.escape_room.constants import (
+    SCREEN_W, SCREEN_H, FPS,
+    idle_path, walk_path, run_path,
+)
+
+
+# -------------------- helpers copied from your main --------------------
+
+def blit_fit(screen: pygame.Surface, world_surf: pygame.Surface):
+    ww, wh = world_surf.get_size()
+    sw, sh = screen.get_size()
+
+    scale = min(sw / ww, sh / wh)
+    new_w = int(ww * scale)
+    new_h = int(wh * scale)
+
+    scaled = pygame.transform.scale(world_surf, (new_w, new_h))
+    x = (sw - new_w) // 2
+    y = (sh - new_h) // 2
+
+    screen.fill((0, 0, 0))
+    screen.blit(scaled, (x, y))
+
+
+def nearest_door_to_interact(doors, player_rect, max_dist=50):
+    best = None
+    best_d2 = 10**18
+    for d in doors:
+        if d.can_interact(player_rect, max_dist_px=max_dist):
+            dx = player_rect.centerx - d.trigger_rect.centerx
+            dy = player_rect.centery - d.trigger_rect.centery
+            d2 = dx*dx + dy*dy
+            if d2 < best_d2:
+                best_d2 = d2
+                best = d
+    return best
+
+
+# -------------------- room loader (TMX objectgroup) --------------------
+
+@dataclass(frozen=True)
+class Room:
+    room_id: str
+    rect: pygame.Rect
+
+
+def load_rooms_from_tmx(tmx_path: str, rooms_layer_name: str = "Rooms") -> List[Room]:
+    """
+    TMX must have an <objectgroup name="Rooms"> where each <object> is a rectangle.
+    Uses object 'name' if present else uses object 'id'.
+    """
+    rooms: List[Room] = []
+    tree = ET.parse(tmx_path)
+    root = tree.getroot()
+
+    rooms_group = None
+    for og in root.findall("objectgroup"):
+        if og.get("name") == rooms_layer_name:
+            rooms_group = og
+            break
+
+    if rooms_group is None:
+        print(f"[ROOMS] No object layer named '{rooms_layer_name}' found in TMX: {tmx_path}")
+        return rooms
+
+    for obj in rooms_group.findall("object"):
+        x = int(float(obj.get("x", "0")))
+        y = int(float(obj.get("y", "0")))
+        w = int(float(obj.get("width", "0")))
+        h = int(float(obj.get("height", "0")))
+        rid = obj.get("name") or obj.get("id") or f"room_{len(rooms)}"
+        rooms.append(Room(room_id=str(rid), rect=pygame.Rect(x, y, w, h)))
+
+    print(f"[ROOMS] Loaded {len(rooms)} rooms from '{rooms_layer_name}'.")
+    return rooms
+
+
+# -------------------- Key proxy (so we DON'T change your Player.update) --------------------
+
+class KeyProxy:
+    """
+    Minimal object that behaves like pygame.key.get_pressed() for Player.update().
+    Player.update likely does: keys[pygame.K_w] etc.
+    """
+    def __init__(self, pressed_keys: Set[int]):
+        self._pressed = pressed_keys
+
+    def __getitem__(self, key: int) -> bool:
+        return key in self._pressed
+
+
+# -------------------- The Gym Env --------------------
+
+class EscapeRoomEnv(gym.Env):
+    """
+    Gymnasium wrapper around your real Escape Room game (TMJ + TMX + Player + Doors).
+
+    Reward (as you said):
+      - time exceed -> terminated True, reward -10
+      - enter room first time -> +5
+      - enter room again -> -0.5
+    """
+
+    metadata = {"render_modes": ["human", "rgb_array"], "render_fps": FPS}
+
+    def __init__(
+        self,
+        render_mode: Optional[str] = None,
+        tmj_path: str = "src/escape_room/assets/maps/level_one.tmj",
+        tmx_path: str = "src/escape_room/assets/maps/level_one.tmx",
+        collision_layer_name: str = "Collision",
+        doors_layer_name: str = "Doors",
+        door_tiles_layer_name: str = "DoorsTiles",
+        rooms_layer_name: str = "Rooms",
+        goal_layer_name: str = "Goal_Room",      # NEW (matches your layer name)
+        goal_reward: float = 10.0,               # NEW
+        terminate_on_goal: bool = True,
+        time_limit_steps: int = 1000,
+        max_interact_dist: int = 60,
+        player_spawn: Optional[Tuple[int, int]] = None,
+        debug_rays: bool = True,
+        
+    ):
+        super().__init__()
+        assert render_mode in (None, "human", "rgb_array")
+        self.render_mode = render_mode
+
+        self.tmj_path = tmj_path
+        self.tmx_path = tmx_path
+
+        self.collision_layer_name = collision_layer_name
+        self.doors_layer_name = doors_layer_name
+        self.door_tiles_layer_name = door_tiles_layer_name
+        self.rooms_layer_name = rooms_layer_name
+
+        self.goal_layer_name = goal_layer_name
+        self.goal_reward = float(goal_reward)
+        self.terminate_on_goal = bool(terminate_on_goal)
+
+        # NEW goal state
+        self.goal_rects: List[pygame.Rect] = []
+        self._goal_reached = False
+
+        self.time_limit_steps = int(time_limit_steps)
+        self.max_interact_dist = int(max_interact_dist)
+        self.debug_rays = bool(debug_rays)
+
+        # actions: 0 noop, 1 up, 2 down, 3 left, 4 right, 5 interact
+        self.action_space = spaces.Discrete(6)
+
+        # observation: you can replace later with real rays etc.
+        # For now: [px_norm, py_norm] only (very simple but valid)
+        self.n_rays = 31                 # choose 31 / 61 / 91 etc.
+        self.ray_max_dist = 300.0        # pixels, must match your world scale
+        self.ray_sensor = RaySensor180(
+            fov_deg=180.0,
+            n_rays=self.n_rays,
+            max_dist=self.ray_max_dist,
+        )
+
+        # observation: normalized ray distances in [0,1]
+        self.observation_space = spaces.Box(
+            low=0.0,
+            high=1.0,
+            shape=(self.n_rays,),
+            dtype=np.float32,
+        )
+
+        # pygame render
+        self._screen: Optional[pygame.Surface] = None
+        self._clock: Optional[pygame.time.Clock] = None
+
+        # world objects initialized in reset()
+        self.tmap: Optional[TiledMap] = None
+        self.world_w = 0
+        self.world_h = 0
+
+        self.base_map: Optional[pygame.Surface] = None
+        self.world_frame: Optional[pygame.Surface] = None
+
+        self.wall_obstacles: List[pygame.Rect] = []
+        self.doors = []
+        self.rooms: List[Room] = []
+
+        self.player: Optional[Player] = None
+        self._spawn = player_spawn  # if None, spawn center
+
+        # reward tracking
+        self.step_count = 0
+        self.visited_rooms: Set[str] = set()
+        self._current_room_id: Optional[str] = None  # for entry-based reward
+
+    # ---------------- Gym API ----------------
+
+    def _player_facing_angle_rad(self) -> float:
+        # Player.direction is one of: "up", "down", "left", "right"
+        d = self.player.direction
+        if d == "right":
+            return 0.0
+        if d == "down":
+            return math.pi / 2.0
+        if d == "left":
+            return math.pi
+        return -math.pi / 2.0  # "up"
+
+
+
+    def _get_ray_obstacles(self):
+        obstacles = list(self.wall_obstacles)
+
+        # If you have door rects, include only the closed ones
+        # (adjust attribute names depending on your Door class)
+        for door in self.doors:
+            if getattr(door, "is_open", False):
+                continue
+            if hasattr(door, "rect"):
+                obstacles.append(door.rect)
+
+        return obstacles
+
+
+
+    def reset(self, *, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None):
+        super().reset(seed=seed)
+
+        if not pygame.get_init():
+            pygame.init()
+
+        if not pygame.display.get_init():
+            pygame.display.init()
+
+        # If no display surface exists yet, create a tiny hidden one.
+        # This is required so pygame.Surface.convert_alpha() works.
+        if pygame.display.get_surface() is None:
+            pygame.display.set_mode((1, 1), flags=pygame.HIDDEN)
+        # init pygame for rendering if needed
+        if self.render_mode is not None and not pygame.get_init():
+            pygame.init()
+
+        # load map
+        self.tmap = TiledMap(self.tmj_path)
+        self.world_w = self.tmap.width * self.tmap.tile_w
+        self.world_h = self.tmap.height * self.tmap.tile_h
+
+        # obstacles from TMX
+        self.wall_obstacles = load_obstacle_rects_from_tmx(self.tmx_path, self.collision_layer_name)
+
+        # doors from TMX (your earlier fix)
+        # pass tmap so door tiles cells can be computed if DoorsTiles exists in TMJ
+        self.doors = build_doors_from_tmx(
+            self.tmx_path,
+            tmap=self.tmap,
+            doors_layer_name=self.doors_layer_name,
+            door_tiles_layer_name=self.door_tiles_layer_name,
+        )
+
+        # rooms from TMX (for your reward)
+        self.rooms = load_rooms_from_tmx(self.tmx_path, rooms_layer_name=self.rooms_layer_name)
+        self.goal_rects = self._load_object_rects_from_tmx(self.tmx_path, self.goal_layer_name)
+        self._goal_reached = False
+
+        # pre-render base map once
+        self.base_map = pygame.Surface((self.world_w, self.world_h), pygame.SRCALPHA)
+        #self.base_map.fill((20, 20, 20))
+        #self.tmap.draw_cached(self.base_map, camera_x=0, camera_y=0)
+        # Build base_map WITHOUT DoorsTiles.
+        # We try to draw each tile layer except DoorsTiles.
+        # (This depends on your TiledMap internals, so we log and fallback.)
+        self.base_map.fill((20, 20, 20))
+
+        try:
+            # If your TiledMap exposes layer names like tmap.layers or tmap.layer_names:
+            layer_names = []
+            if hasattr(self.tmap, "layers") and isinstance(self.tmap.layers, dict):
+                layer_names = list(self.tmap.layers.keys())
+            elif hasattr(self.tmap, "layer_names"):
+                layer_names = list(self.tmap.layer_names)
+
+            print(f"[MAP] layer_names={layer_names}")
+
+            # draw all layers except DoorsTiles
+            for lname in layer_names:
+                if lname == self.door_tiles_layer_name:
+                    continue
+                self.tmap.draw_tile_layer(self.base_map, lname, camera_x=0, camera_y=0)
+
+            print(f"[MAP] base_map rendered without '{self.door_tiles_layer_name}'")
+        except Exception as e:
+            print(f"[MAP] Could not build base_map layer-by-layer: {e}")
+            print("[MAP] FALLBACK: base_map will include DoorsTiles, door visuals may not disappear.")
+            self.tmap.draw_cached(self.base_map, camera_x=0, camera_y=0)
+
+
+
+        # world working surface
+        self.world_frame = pygame.Surface((self.world_w, self.world_h), pygame.SRCALPHA)
+
+        # player
+        anim = load_player_animations(idle_path=idle_path, walk_path=walk_path, run_path=run_path)
+
+        spawn = self._spawn
+        if spawn is None:
+            spawn = (self.world_w // 2, self.world_h // 2)
+
+        self.player = Player(pos=spawn, animations=anim, scale=0.5)
+
+        # reset trackers
+        self.step_count = 0
+        self.visited_rooms.clear()
+        self._current_room_id = self._room_id_for_player(self.player.rect)  # may be None
+        if self._current_room_id is not None:
+            # starting room counts as "visited" but no reward on reset
+            self.visited_rooms.add(self._current_room_id)
+
+        obs = self._get_obs()
+        info = {}
+
+        # render first frame so window isn't blank
+        if self.render_mode == "human":
+            self.render()
+
+        return obs, info
+
+    def step(self, action: int):
+        assert self.player is not None
+        assert self.tmap is not None
+        assert self.world_frame is not None
+
+        self.step_count += 1
+
+        # ----- time exceeded => end with -10 -----
+        terminated = False
+        truncated = False
+        reward = 0.0
+
+        if self.step_count >= self.time_limit_steps:
+            terminated = True
+            reward = -10.0
+            obs = self._get_obs()
+            info = self._get_info()
+            if self.render_mode == "human":
+                self.render()
+            return obs, reward, terminated, truncated, info
+
+        # ----- apply action -> keys for your existing Player.update() -----
+        pressed = set()
+
+        # WASD + arrows (support both)
+        if action == 1:
+            pressed.add(pygame.K_w); pressed.add(pygame.K_UP)
+        elif action == 2:
+            pressed.add(pygame.K_s); pressed.add(pygame.K_DOWN)
+        elif action == 3:
+            pressed.add(pygame.K_a); pressed.add(pygame.K_LEFT)
+        elif action == 4:
+            pressed.add(pygame.K_d); pressed.add(pygame.K_RIGHT)
+        elif action == 5:
+            door = nearest_door_to_interact(self.doors, self.player.rect, max_dist=self.max_interact_dist)
+
+            if door is None:
+                print(f"[INTERACT] No door in range. player_center={self.player.rect.center} max_dist={self.max_interact_dist}")
+            else:
+                # Try to read door state safely (different implementations use different fields)
+                before = getattr(door, "open", getattr(door, "is_open", None))
+                print(
+                    f"[INTERACT] Door FOUND. before_open={before} "
+                    f"player_center={self.player.rect.center} trigger_center={getattr(door,'trigger_rect',None).center if hasattr(door,'trigger_rect') else None}"
+                )
+
+                door.toggle()
+
+                after = getattr(door, "open", getattr(door, "is_open", None))
+                print(f"[INTERACT] Door TOGGLED. after_open={after}")
+
+                # useful debug: blockers count and tiles count
+                if hasattr(door, "blocker_rects"):
+                    print(f"[INTERACT] blocker_rects_count={len(door.blocker_rects())}")
+                if hasattr(door, "tiles_cells"):
+                    print(f"[INTERACT] tiles_cells_count={len(door.tiles_cells)}")
+
+        keys = KeyProxy(pressed)
+
+        # ----- door auto close -----
+        for d in self.doors:
+            d.update_auto_close(self.player.rect)
+
+        # ----- obstacles this frame (walls + closed doors) -----
+        door_blockers: List[pygame.Rect] = []
+        for d in self.doors:
+            door_blockers.extend(d.blocker_rects())
+
+        obstacles = self.wall_obstacles + door_blockers
+
+        # spatial hash
+        grid = SpatialHash(cell_size=self.tmap.tile_w)
+        grid.build(obstacles)
+
+        # ----- update player with collisions (UNCHANGED player.update) -----
+        dt = 1.0 / float(FPS)
+        self.player.update(dt, keys, obstacles, grid)
+
+        # clamp world bounds
+        self.player.pos.x = max(0, min(self.world_w, self.player.pos.x))
+        self.player.pos.y = max(0, min(self.world_h, self.player.pos.y))
+        self.player._sync_rect_to_pos()
+
+        # ----- reward: room visit (ENTRY-BASED) -----
+        reward += self._room_entry_reward()
+        goal_hit = any(gr.colliderect(self.player.rect) for gr in self.goal_rects)
+        if goal_hit and not self._goal_reached:
+            reward += self.goal_reward
+            self._goal_reached = True
+            if self.terminate_on_goal:
+                terminated = True
+
+        obs = self._get_obs()
+        info = self._get_info()
+
+        if self.render_mode == "human":
+            self.render()
+
+        return obs, reward, terminated, truncated, info
+
+    def render(self):
+        if self.render_mode is None:
+            return None
+
+        if self._screen is None:
+            if not pygame.get_init():
+                pygame.init()
+            self._screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
+            pygame.display.set_caption("Escape Room (Gym Env)")
+            self._clock = pygame.time.Clock()
+
+        # keep window responsive
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT:
+                self.close()
+                return None
+
+        assert self.world_frame is not None
+        assert self.base_map is not None
+        assert self.tmap is not None
+        assert self.player is not None
+
+        # draw base
+        self.world_frame.fill((20, 20, 20))
+        self.tmap.draw_cached(self.world_frame, camera_x=0, camera_y=0)
+
+
+        # draw door tiles only if CLOSED (skip cells for open doors)
+        skip_cells = set()
+        for d in self.doors:
+            if d.open:
+                skip_cells |= d.tiles_cells
+
+        # draw DoorsTiles if it exists in TMJ (if missing, your TiledMap method should handle/print)
+        try:
+            self.tmap.draw_tile_layer(
+                self.world_frame,
+                self.door_tiles_layer_name,
+                camera_x=0,
+                camera_y=0,
+                skip_cells=skip_cells,
+            )
+        except Exception:
+            # if your draw_tile_layer throws when layer missing, ignore
+            pass
+
+        # player sprite
+        self.world_frame.blit(self.player.image, self.player.rect.topleft)
+
+        # rays
+        if self.debug_rays and hasattr(self.player, "ray_sensor") and self.player.ray_sensor:
+            self.player.ray_sensor.draw(self.world_frame)
+
+        # fit to screen
+        blit_fit(self._screen, self.world_frame)
+        pygame.display.flip()
+
+        if self._clock is not None:
+            self._clock.tick(self.metadata["render_fps"])
+
+        if self.render_mode == "rgb_array":
+            arr = pygame.surfarray.array3d(self._screen)  # (W,H,3)
+            return np.transpose(arr, (1, 0, 2))  # (H,W,3)
+        
+        if self.debug_rays:
+            self.ray_sensor.draw(self.world_frame)
+
+        return None
+
+    def close(self):
+        if self._screen is not None:
+            pygame.quit()
+        self._screen = None
+        self._clock = None
+
+    # ---------------- internal helpers ----------------
+
+    def _get_obs(self) -> np.ndarray:
+        # origin = player feet position (your player uses rect.midbottom)
+        origin = pygame.Vector2(self.player.rect.midbottom)
+
+        facing = self._player_facing_angle_rad()
+        obstacles = self._get_ray_obstacles()
+
+        dists = self.ray_sensor.update(origin, facing, obstacles)  # list[float]
+        dists = np.asarray(dists, dtype=np.float32)
+
+        # normalize to [0,1]
+        obs = np.clip(dists / float(self.ray_max_dist), 0.0, 1.0).astype(np.float32)
+        return obs
+
+    def _get_info(self) -> Dict[str, Any]:
+        return {
+            "step": self.step_count,
+            "visited_rooms": len(self.visited_rooms),
+            "current_room": self._current_room_id,
+        }
+
+    def _room_id_for_player(self, player_rect: pygame.Rect) -> Optional[str]:
+        for r in self.rooms:
+            if r.rect.colliderect(player_rect):
+                return r.room_id
+        return None
+
+    def _room_entry_reward(self) -> float:
+        """
+        ENTRY-based:
+          - on entering a room first time: +5
+          - on entering a visited room again: -0.5
+          - staying in same room: 0
+          - in no room: 0
+        """
+        assert self.player is not None
+
+        now = self._room_id_for_player(self.player.rect)
+
+        # only reward when room changes (entry event)
+        if now == self._current_room_id:
+            return 0.0
+
+        self._current_room_id = now
+
+        if now is None:
+            return 0.0
+
+        if now not in self.visited_rooms:
+            self.visited_rooms.add(now)
+            return 5.0
+        else:
+            return -0.5
+        
+    
+    def _load_object_rects_from_tmx(self, tmx_path: str, layer_name: str) -> List[pygame.Rect]:
+        """
+        Reads <objectgroup name="layer_name"> from TMX and returns pygame.Rect list.
+        Supports rectangle objects (x,y,width,height).
+        """
+        rects: List[pygame.Rect] = []
+
+        tree = ET.parse(tmx_path)
+        root = tree.getroot()
+
+        # object layers are <objectgroup>
+        for og in root.findall("objectgroup"):
+            if og.attrib.get("name") != layer_name:
+                continue
+
+            for obj in og.findall("object"):
+                x = float(obj.attrib.get("x", "0"))
+                y = float(obj.attrib.get("y", "0"))
+                w = float(obj.attrib.get("width", "0"))
+                h = float(obj.attrib.get("height", "0"))
+
+                # skip points/empty objects
+                if w <= 0 or h <= 0:
+                    continue
+
+                rects.append(pygame.Rect(int(x), int(y), int(w), int(h)))
+
+        return rects
