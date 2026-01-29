@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<map version="1.10" tiledversion="1.11.2" orientation="orthogonal" renderorder="right-down" width="35" height="32" tilewidth="16" tileheight="16" infinite="0" nextlayerid="4" nextobjectid="26">
+<map version="1.10" tiledversion="1.11.2" orientation="orthogonal" renderorder="right-down" width="35" height="32" tilewidth="16" tileheight="16" infinite="0" nextlayerid="7" nextobjectid="34">
  <tileset firstgid="1" source="../../../../../../Projects/game/escape.tsx"/>
  <tileset firstgid="210" source="escape1.tsx"/>
  <tileset firstgid="462" source="../../../../../../Projects/game/side door.tsx"/>
@@ -39,7 +39,7 @@
 97,98,98,98,98,98,98,98,98,98,98,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,100,100,100,100,100,100,101
 </data>
  </layer>
- <objectgroup id="3" name="Doors">
+ <objectgroup id="3" name="Doors" visible="0">
   <object id="19" x="127.779" y="49.9728" width="16.4468" height="29.7307"/>
   <object id="20" x="126.513" y="192.3" width="17.0793" height="32.8935"/>
   <object id="21" x="383.336" y="48.0751" width="18.3445" height="32.8935"/>
@@ -48,7 +48,7 @@
   <object id="24" x="238.478" y="414.964" width="33.5261" height="24.0376"/>
   <object id="25" x="127.146" y="368.154" width="17.0793" height="32.2609"/>
  </objectgroup>
- <objectgroup id="2" name="Collision">
+ <objectgroup id="2" name="Collision" visible="0">
   <object id="1" x="0.666667" y="0.666667" width="14" height="508.667"/>
   <object id="2" x="17" y="0" width="527" height="14"/>
   <object id="3" x="545" y="0" width="15" height="510"/>
@@ -67,5 +67,17 @@
   <object id="16" x="384" y="16" width="15" height="31"/>
   <object id="17" x="383.5" y="80" width="16" height="112"/>
   <object id="18" x="400" y="143" width="143.5" height="19"/>
+ </objectgroup>
+ <objectgroup id="5" name="Rooms" visible="0">
+  <object id="26" x="16.4468" y="14.549" width="110.699" height="127.146"/>
+  <object id="27" x="401.048" y="15.1816" width="142.96" height="126.513"/>
+  <object id="28" x="401.048" y="162.57" width="141.695" height="154.346"/>
+  <object id="29" x="401.68" y="337.791" width="141.063" height="154.979"/>
+  <object id="30" x="144.858" y="435.206" width="237.213" height="59.4613"/>
+  <object id="31" x="17.0793" y="337.791" width="110.699" height="156.244"/>
+  <object id="32" x="16.4468" y="158.774" width="110.699" height="158.142"/>
+ </objectgroup>
+ <objectgroup id="6" name="Goal_Room">
+  <object id="33" x="16.4468" y="15.1816" width="48.0754" height="128.411"/>
  </objectgroup>
 </map>

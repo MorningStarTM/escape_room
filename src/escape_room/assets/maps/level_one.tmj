@@ -47,19 +47,107 @@
         }, 
         {
          "draworder":"topdown",
+         "id":3,
+         "name":"Doors",
+         "objects":[
+                {
+                 "height":29.7307,
+                 "id":19,
+                 "name":"",
+                 "rotation":0,
+                 "type":"",
+                 "visible":true,
+                 "width":16.4468,
+                 "x":127.779,
+                 "y":49.9728
+                }, 
+                {
+                 "height":32.8935,
+                 "id":20,
+                 "name":"",
+                 "rotation":0,
+                 "type":"",
+                 "visible":true,
+                 "width":17.0793,
+                 "x":126.513,
+                 "y":192.3
+                }, 
+                {
+                 "height":32.8935,
+                 "id":21,
+                 "name":"",
+                 "rotation":0,
+                 "type":"",
+                 "visible":true,
+                 "width":18.3445,
+                 "x":383.336,
+                 "y":48.0751
+                }, 
+                {
+                 "height":30.9958,
+                 "id":22,
+                 "name":"",
+                 "rotation":0,
+                 "type":"",
+                 "visible":true,
+                 "width":18.3445,
+                 "x":383.336,
+                 "y":191.668
+                }, 
+                {
+                 "height":30.9958,
+                 "id":23,
+                 "name":"",
+                 "rotation":0,
+                 "type":"",
+                 "visible":true,
+                 "width":17.0793,
+                 "x":383.968,
+                 "y":352.34
+                }, 
+                {
+                 "height":24.0376,
+                 "id":24,
+                 "name":"",
+                 "rotation":0,
+                 "type":"",
+                 "visible":true,
+                 "width":33.5261,
+                 "x":238.478,
+                 "y":414.964
+                }, 
+                {
+                 "height":32.2609,
+                 "id":25,
+                 "name":"",
+                 "rotation":0,
+                 "type":"",
+                 "visible":true,
+                 "width":17.0793,
+                 "x":127.146,
+                 "y":368.154
+                }],
+         "opacity":1,
+         "type":"objectgroup",
+         "visible":false,
+         "x":0,
+         "y":0
+        }, 
+        {
+         "draworder":"topdown",
          "id":2,
          "name":"Collision",
          "objects":[
                 {
-                 "height":508.666666666667,
+                 "height":508.667,
                  "id":1,
                  "name":"",
                  "rotation":0,
                  "type":"",
                  "visible":true,
                  "width":14,
-                 "x":0.666666666666667,
-                 "y":0.666666666666667
+                 "x":0.666667,
+                 "y":0.666667
                 }, 
                 {
                  "height":14,
@@ -250,12 +338,122 @@
                 }],
          "opacity":1,
          "type":"objectgroup",
-         "visible":true,
+         "visible":false,
+         "x":0,
+         "y":0
+        }, 
+        {
+         "draworder":"topdown",
+         "id":5,
+         "name":"Rooms",
+         "objects":[
+                {
+                 "height":127.146034099333,
+                 "id":26,
+                 "name":"",
+                 "rotation":0,
+                 "type":"",
+                 "visible":true,
+                 "width":110.699283419817,
+                 "x":16.4467506795157,
+                 "y":14.5490486780331
+                }, 
+                {
+                 "height":126.513466765505,
+                 "id":27,
+                 "name":"",
+                 "rotation":0,
+                 "type":"",
+                 "visible":true,
+                 "width":142.960217445021,
+                 "x":401.047689646652,
+                 "y":15.1816160118606
+                }, 
+                {
+                 "height":154.346429453916,
+                 "id":28,
+                 "name":"",
+                 "rotation":0,
+                 "type":"",
+                 "visible":true,
+                 "width":141.695082777366,
+                 "x":401.047689646652,
+                 "y":162.569804793674
+                }, 
+                {
+                 "height":154.978996787744,
+                 "id":29,
+                 "name":"",
+                 "rotation":0,
+                 "type":"",
+                 "visible":true,
+                 "width":141.062515443538,
+                 "x":401.680256980479,
+                 "y":337.790956263899
+                }, 
+                {
+                 "height":59.4613293797875,
+                 "id":30,
+                 "name":"",
+                 "rotation":0,
+                 "type":"",
+                 "visible":true,
+                 "width":237.212750185323,
+                 "x":144.857919446504,
+                 "y":435.206325673338
+                }, 
+                {
+                 "height":156.244131455399,
+                 "id":31,
+                 "name":"",
+                 "rotation":0,
+                 "type":"",
+                 "visible":true,
+                 "width":110.699283419817,
+                 "x":17.0793180133432,
+                 "y":337.790956263899
+                }, 
+                {
+                 "height":158.141833456882,
+                 "id":32,
+                 "name":"",
+                 "rotation":0,
+                 "type":"",
+                 "visible":true,
+                 "width":110.699283419817,
+                 "x":16.4467506795157,
+                 "y":158.774400790709
+                }],
+         "opacity":1,
+         "type":"objectgroup",
+         "visible":false,
+         "x":0,
+         "y":0
+        }, 
+        {
+         "draworder":"topdown",
+         "id":6,
+         "name":"Goal_Room",
+         "objects":[
+                {
+                 "height":127.146034099333,
+                 "id":33,
+                 "name":"",
+                 "rotation":0,
+                 "type":"",
+                 "visible":true,
+                 "width":110.06671608599,
+                 "x":16.4467506795157,
+                 "y":15.1816160118606
+                }],
+         "opacity":1,
+         "type":"objectgroup",
+         "visible":false,
          "x":0,
          "y":0
         }],
- "nextlayerid":3,
- "nextobjectid":19,
+ "nextlayerid":7,
+ "nextobjectid":34,
  "orientation":"orthogonal",
  "renderorder":"right-down",
  "tiledversion":"1.11.2",
@@ -267,7 +465,7 @@
         }, 
         {
          "firstgid":210,
-         "source":"..\/maps\/escape1.tsx"
+         "source":"escape1.tsx"
         }, 
         {
          "firstgid":462,
