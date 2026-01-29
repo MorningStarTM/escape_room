@@ -64,3 +64,78 @@ def build_doors_from_tiled(tmap, doors_layer_name="Doors", door_tiles_layer_name
 
     print(f"[DOORS] Loaded {len(doors)} doors from '{doors_layer_name}'.")
     return doors
+
+
+
+
+
+import xml.etree.ElementTree as ET
+import pygame
+
+# ... keep your Door class and build_doors_from_tiled as-is ...
+
+
+def build_doors_from_tmx(
+    tmx_path: str,
+    tmap=None,
+    doors_layer_name: str = "Doors",
+    door_tiles_layer_name: str = "DoorsTiles",
+):
+    """
+    Reads Doors from a TMX objectgroup layer.
+    - tmx_path: path to .tmx (where your 'Doors' object layer exists)
+    - tmap: optional; pass your TMJ TiledMap so we can compute tiles_cells properly
+            using tmap.tile_w / tile_h and checking if 'DoorsTiles' exists in TMJ.
+    """
+    doors = []
+
+    # Parse TMX XML
+    tree = ET.parse(tmx_path)
+    root = tree.getroot()  # <map>
+
+    # Find the objectgroup with name=doors_layer_name
+    doors_group = None
+    for og in root.findall("objectgroup"):
+        if og.get("name") == doors_layer_name:
+            doors_group = og
+            break
+
+    if doors_group is None:
+        print(f"[DOORS] No object layer named '{doors_layer_name}' found in TMX: {tmx_path}")
+        return doors
+
+    # We only compute tiles_cells if:
+    #  - we have tmap (tile sizes)
+    #  - AND the DoorsTiles layer exists in the TMJ map (because you draw DoorsTiles from tmap)
+    has_door_tiles_layer = False
+    if tmap is not None:
+        has_door_tiles_layer = (tmap.get_tile_layer_by_name(door_tiles_layer_name) is not None)
+
+    # Read each <object> in the Doors objectgroup
+    for obj in doors_group.findall("object"):
+        x = int(float(obj.get("x", "0")))
+        y = int(float(obj.get("y", "0")))
+        w = int(float(obj.get("width", "0")))
+        h = int(float(obj.get("height", "0")))
+
+        blocker = pygame.Rect(x, y, w, h)
+        trigger = blocker.inflate(60, 60)
+
+        cells = set()
+        if has_door_tiles_layer:
+            tw = tmap.tile_w
+            th = tmap.tile_h
+
+            tx0 = blocker.left // tw
+            ty0 = blocker.top  // th
+            tx1 = (blocker.right - 1) // tw
+            ty1 = (blocker.bottom - 1) // th
+
+            for ty in range(ty0, ty1 + 1):
+                for tx in range(tx0, tx1 + 1):
+                    cells.add((tx, ty))
+
+        doors.append(Door(blocker_rect=blocker, trigger_rect=trigger, tiles_cells=cells))
+
+    print(f"[DOORS] Loaded {len(doors)} doors from TMX object layer '{doors_layer_name}'.")
+    return doors
