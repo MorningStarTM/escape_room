@@ -2,7 +2,7 @@
 import sys
 import pygame
 from src.escape_room.core.tiles import TiledMap
-from src.escape_room.core.doors import build_doors_from_tiled
+from src.escape_room.core.doors import build_doors_from_tiled, build_doors_from_tmx
 from src.escape_room.core.tiles import TiledMap, load_obstacle_rects_from_tmx  # adjust import if your package name differs
 from src.escape_room.core.player import Player, load_player_animations  # if player.py is also in src/
 from src.escape_room.constants import *
@@ -198,7 +198,10 @@ def basic():
     tmap.draw_cached(base_map, camera_x=0, camera_y=0)
 
     # --- doors from Tiled ---
-    doors = build_doors_from_tiled(tmap, doors_layer_name="Doors", door_tiles_layer_name="DoorsTiles")
+    doors = build_doors_from_tmx(
+    "src/escape_room/assets/maps/level_one.tmx",
+    doors_layer_name="Doors"
+)
 
     # --- player ---
     anim = load_player_animations(
