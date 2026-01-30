@@ -1,0 +1,27 @@
+from src.escape_room.gym_envs.escape_room_v1 import EscapeRoomEnv
+import gymnasium as gym
+from src.escape_room.agents.ppo import Trainer
+
+
+
+
+def train_ppo(config:dict):
+    gym.envs.register(
+                id='EscapeRoomGame-v0',
+                entry_point='__main__:EscapeRoomEnv',
+            )
+
+    env = gym.make(
+            "EscapeRoomGame-v0",
+            render_mode=config.get("render_mode", None),
+            tmj_path="src/escape_room/assets/maps/level_one.tmj",
+            tmx_path="src/escape_room/assets/maps/level_one.tmx",
+            collision_layer_name="Collision",
+            doors_layer_name="Doors",
+            door_tiles_layer_name="DoorsTiles",
+            rooms_layer_name="Rooms",   # <-- create this object layer in TMX for room reward
+            time_limit_steps=config.get("time_limit_steps", 500),
+        )
+    
+    trainer = Trainer(env, config)
+    trainer.train()
