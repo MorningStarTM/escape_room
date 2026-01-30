@@ -1,100 +1,114 @@
-# src/main.py
-import sys
-import pygame
+from src.escape_room.envs.env import level_one, basic
+from src.escape_room.gym_envs.escape_room_v1 import EscapeRoomEnv
+from src.escape_room.agents.train import train_ppo
+import gymnasium as gym
 
-from src.escape_room.core.tiles import TiledMap  # adjust import if your package name differs
-from src.escape_room.core.player import Player, load_player_animations  # if player.py is also in src/
-from src.escape_room.constants import *
-
-
-
-def clamp(v, lo, hi):
-    if v < lo:
-        return lo
-    if v > hi:
-        return hi
-    return v
-
-
-def blit_fit(screen: pygame.Surface, world_surf: pygame.Surface):
-    ww, wh = world_surf.get_size()
-    sw, sh = screen.get_size()
-
-    scale = min(sw / ww, sh / wh)  # fit fully inside screen
-    new_w = int(ww * scale)
-    new_h = int(wh * scale)
-
-    scaled = pygame.transform.scale(world_surf, (new_w, new_h))
-    x = (sw - new_w) // 2
-    y = (sh - new_h) // 2
-
-    screen.fill((0, 0, 0))
-    screen.blit(scaled, (x, y))
 
 
 def main():
-    pygame.init()
-    screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
-    pygame.display.set_caption("TMJ Fit-to-Screen Test")
-    clock = pygame.time.Clock()
+    gym.envs.register(
+            id='EscapeRoomGame-v0',
+            entry_point='__main__:EscapeRoomEnv',
+        )
 
-    # --- load map ---
-    tmap = TiledMap("src/escape_room/assets/maps/finalized_escape.tmj")
-    world_w = tmap.width * tmap.tile_w
-    world_h = tmap.height * tmap.tile_h
+    env = gym.make(
+            "EscapeRoomGame-v0",
+            render_mode="human",
+            tmj_path="src/escape_room/assets/maps/level_one.tmj",
+            tmx_path="src/escape_room/assets/maps/level_one.tmx",
+            collision_layer_name="Collision",
+            doors_layer_name="Doors",
+            door_tiles_layer_name="DoorsTiles",
+            rooms_layer_name="Rooms",   # <-- create this object layer in TMX for room reward
+            time_limit_steps=500,
+        )
+    obs, info = env.reset()
+    print("Initial observation:", obs.shape)
+    print("action space", env.action_space.n)
+    done = False
+    score = 0
+    while not done:
+        action = env.action_space.sample()
+        obs, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
+        # print(reward, info)
+        score += reward
+    print("Final score:", score)
+    env.close()
 
-    # --- pre-render map once (fast) ---
-    map_surf = pygame.Surface((world_w, world_h), pygame.SRCALPHA)
-    map_surf.fill((20, 20, 20))
-    tmap.draw(map_surf, camera_x=0, camera_y=0)
 
-    # --- load player ---
-    anim = load_player_animations(
-        idle_path=idle_path,
-        walk_path=walk_path,
-        run_path=run_path,
+
+
+def test_env():
+    gym.envs.register(
+        id="EscapeRoomGame-v0",
+        entry_point="__main__:EscapeRoomEnv",
     )
 
-    player = Player(
-        pos=(world_w // 2, world_h // 2),  # world coords (feet position)
-        animations=anim,
-        scale=0.5,     # keep 1; whole world will be scaled to screen anyway
+    env = gym.make(
+        "EscapeRoomGame-v0",
+        render_mode="human",
+        tmj_path="src/escape_room/assets/maps/level_one.tmj",
+        tmx_path="src/escape_room/assets/maps/level_one.tmx",
+        collision_layer_name="Collision",
+        doors_layer_name="Doors",
+        door_tiles_layer_name="DoorsTiles",
+        rooms_layer_name="Rooms",
+        time_limit_steps=500,
+        # if you added these args in env:
+        goal_layer_name="Goal_Room",
+        goal_reward=10.0,
+        terminate_on_goal=True,
     )
 
-    # working surface (world-sized) to compose frame: map + player
-    world_frame = pygame.Surface((world_w, world_h), pygame.SRCALPHA)
+    obs, info = env.reset()
+    print("Initial observation:", obs.shape)
+    print("action space", env.action_space.n)
 
-    running = True
-    while running:
-        dt = clock.tick(FPS) / 1000.0
+    # actions: 0 noop, 1 up, 2 down, 3 left, 4 right, 5 interact
+    scripted_actions = (
+        [1] * 60 +   # UP
+        [3] * 50  +   # LEFT
+        [5] * 5  +   # INTERACT
+        [3] * 40      # LEFT
+    )
 
-        for e in pygame.event.get():
-            if e.type == pygame.QUIT:
-                running = False
+    score = 0.0
+    done = False
 
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_ESCAPE]:
-            running = False
+    for i, action in enumerate(scripted_actions, start=1):
+        obs, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
+        score += float(reward)
 
-        # update player in world space
-        player.update(dt, keys)
+        print(f"step={i:03d} action={action} reward={reward:.2f} terminated={terminated} truncated={truncated} room={info.get('current_room')}")
 
-        # keep player inside world bounds (simple clamp)
-        player.pos.x = max(0, min(world_w, player.pos.x))
-        player.pos.y = max(0, min(world_h, player.pos.y))
-        player._sync_rect_to_pos()  # update rect after clamp
+        if done:
+            print("Episode ended early (likely goal reached).")
+            break
 
-        # compose: map + player into world_frame
-        world_frame.blit(map_surf, (0, 0))
-        world_frame.blit(player.image, player.rect.topleft)
+    if not done:
+        print("Script finished but episode did NOT end. (Then goal rect / door / path not matching.)")
 
-        # fit whole world into 720x640
-        blit_fit(screen, world_frame)
-        pygame.display.flip()
-
-    pygame.quit()
-    sys.exit()
+    print("Final score:", score)
+    env.close()
 
 
-if __name__ == "__main__":
-    main()
+
+def start_training():
+    config = {
+        "render_mode": None,
+        "time_limit_steps": 500,
+        'gamma': 0.99,
+        'eps_clip': 0.2,
+        'K_epochs': 4,
+        'lr_actor': 1e-4,
+        'lr_critic': 1e-3,
+        'max_training_timesteps': int(3e6),  # Adjust as needed
+        'max_ep_len': 1000,                  # Max timesteps per episode
+        'update_timestep': 1000 * 4,            # How often to update PPO
+        'log_freq': 1000 * 2,                   # How often to log
+        'print_freq': 2000 * 5,                 # How often to print stats
+        'save_model_freq': int(1e5)           # How often to save model
+    }
+    train_ppo(config)
