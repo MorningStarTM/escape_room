@@ -22,6 +22,7 @@ def train_ppo(config:dict):
             rooms_layer_name="Rooms",   # <-- create this object layer in TMX for room reward
             time_limit_steps=config.get("time_limit_steps", 500),
         )
-    
+    config['state_dim'] = env.observation_space.shape[0]
+    config['action_dim'] = env.action_space.n
     trainer = Trainer(env, config)
     trainer.train()
