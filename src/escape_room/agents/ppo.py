@@ -289,7 +289,6 @@ class Trainer:
 
         # (optional) write CSV headers once
         self._init_csv(self.log_f_name, header=["episode", "timestep", "reward", "done"])
-        self._init_csv(self.reward_f_name, header=["episode", "episode_reward"])
 
     @staticmethod
     def _next_run_number(root_dir: str) -> int:
