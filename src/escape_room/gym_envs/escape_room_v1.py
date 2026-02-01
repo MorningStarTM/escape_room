@@ -79,7 +79,7 @@ def load_rooms_from_tmx(tmx_path: str, rooms_layer_name: str = "Rooms") -> List[
             break
 
     if rooms_group is None:
-        print(f"[ROOMS] No object layer named '{rooms_layer_name}' found in TMX: {tmx_path}")
+        #print(f"[ROOMS] No object layer named '{rooms_layer_name}' found in TMX: {tmx_path}")
         return rooms
 
     for obj in rooms_group.findall("object"):
@@ -90,7 +90,7 @@ def load_rooms_from_tmx(tmx_path: str, rooms_layer_name: str = "Rooms") -> List[
         rid = obj.get("name") or obj.get("id") or f"room_{len(rooms)}"
         rooms.append(Room(room_id=str(rid), rect=pygame.Rect(x, y, w, h)))
 
-    print(f"[ROOMS] Loaded {len(rooms)} rooms from '{rooms_layer_name}'.")
+    #print(f"[ROOMS] Loaded {len(rooms)} rooms from '{rooms_layer_name}'.")
     return rooms
 
 
@@ -295,7 +295,7 @@ class EscapeRoomEnv(gym.Env):
             elif hasattr(self.tmap, "layer_names"):
                 layer_names = list(self.tmap.layer_names)
 
-            print(f"[MAP] layer_names={layer_names}")
+            #print(f"[MAP] layer_names={layer_names}")
 
             # draw all layers except DoorsTiles
             for lname in layer_names:
@@ -303,10 +303,10 @@ class EscapeRoomEnv(gym.Env):
                     continue
                 self.tmap.draw_tile_layer(self.base_map, lname, camera_x=0, camera_y=0)
 
-            print(f"[MAP] base_map rendered without '{self.door_tiles_layer_name}'")
+            #print(f"[MAP] base_map rendered without '{self.door_tiles_layer_name}'")
         except Exception as e:
-            print(f"[MAP] Could not build base_map layer-by-layer: {e}")
-            print("[MAP] FALLBACK: base_map will include DoorsTiles, door visuals may not disappear.")
+            #print(f"[MAP] Could not build base_map layer-by-layer: {e}")
+            #print("[MAP] FALLBACK: base_map will include DoorsTiles, door visuals may not disappear.")
             self.tmap.draw_cached(self.base_map, camera_x=0, camera_y=0)
 
 
@@ -376,26 +376,27 @@ class EscapeRoomEnv(gym.Env):
         elif action == 5:
             door = nearest_door_to_interact(self.doors, self.player.rect, max_dist=self.max_interact_dist)
 
-            if door is None:
-                print(f"[INTERACT] No door in range. player_center={self.player.rect.center} max_dist={self.max_interact_dist}")
-            else:
+            # if door is None:
+            #     #print(f"[INTERACT] No door in range. player_center={self.player.rect.center} max_dist={self.max_interact_dist}")
+            #     return
+            if door is not None:
                 # Try to read door state safely (different implementations use different fields)
                 before = getattr(door, "open", getattr(door, "is_open", None))
-                print(
-                    f"[INTERACT] Door FOUND. before_open={before} "
-                    f"player_center={self.player.rect.center} trigger_center={getattr(door,'trigger_rect',None).center if hasattr(door,'trigger_rect') else None}"
-                )
+                # print(
+                #     f"[INTERACT] Door FOUND. before_open={before} "
+                #     f"player_center={self.player.rect.center} trigger_center={getattr(door,'trigger_rect',None).center if hasattr(door,'trigger_rect') else None}"
+                # )
 
                 door.toggle()
 
                 after = getattr(door, "open", getattr(door, "is_open", None))
-                print(f"[INTERACT] Door TOGGLED. after_open={after}")
+                #print(f"[INTERACT] Door TOGGLED. after_open={after}")
 
                 # useful debug: blockers count and tiles count
-                if hasattr(door, "blocker_rects"):
-                    print(f"[INTERACT] blocker_rects_count={len(door.blocker_rects())}")
-                if hasattr(door, "tiles_cells"):
-                    print(f"[INTERACT] tiles_cells_count={len(door.tiles_cells)}")
+                # if hasattr(door, "blocker_rects"):
+                #     print(f"[INTERACT] blocker_rects_count={len(door.blocker_rects())}")
+                # if hasattr(door, "tiles_cells"):
+                #     print(f"[INTERACT] tiles_cells_count={len(door.tiles_cells)}")
 
         keys = KeyProxy(pressed)
 

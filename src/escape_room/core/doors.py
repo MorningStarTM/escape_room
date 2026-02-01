@@ -62,7 +62,7 @@ def build_doors_from_tiled(tmap, doors_layer_name="Doors", door_tiles_layer_name
 
         doors.append(Door(blocker_rect=blocker, trigger_rect=trigger, tiles_cells=cells))
 
-    print(f"[DOORS] Loaded {len(doors)} doors from '{doors_layer_name}'.")
+    #print(f"[DOORS] Loaded {len(doors)} doors from '{doors_layer_name}'.")
     return doors
 
 
@@ -137,5 +137,5 @@ def build_doors_from_tmx(
 
         doors.append(Door(blocker_rect=blocker, trigger_rect=trigger, tiles_cells=cells))
 
-    print(f"[DOORS] Loaded {len(doors)} doors from TMX object layer '{doors_layer_name}'.")
+    #print(f"[DOORS] Loaded {len(doors)} doors from TMX object layer '{doors_layer_name}'.")
     return doors
