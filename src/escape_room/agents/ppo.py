@@ -1,12 +1,15 @@
 import os
 import time
+import json
 import numpy as np
 from datetime import datetime
 import torch
+import csv
 import torch.nn as nn
 from torch.distributions import MultivariateNormal
 from torch.distributions import Categorical
 from src.escape_room.utils.logger import logger
+from safetensors.torch import save_file, load_file
 
 
 
@@ -195,13 +198,48 @@ class PPO:
         self.policy.load_state_dict(torch.load(file, map_location=lambda storage, loc: storage))
 
 
+    def save_safetensors(self, checkpoint_path, filename="ppo_policy.safetensors", meta_filename="ppo_meta.json"):
+        os.makedirs(checkpoint_path, exist_ok=True)
+
+        # Save policy_old (the one you actually use for acting)
+        state = self.policy_old.state_dict()
+
+        # safetensors needs a plain {str: Tensor} dict (CPU tensors are safest)
+        tensor_dict = {k: v.detach().cpu().contiguous() for k, v in state.items()}
+
+        save_file(tensor_dict, os.path.join(checkpoint_path, filename))
+
+        # Optional: store non-tensor metadata separately (JSON)
+        meta = {
+            "state_dim": None,
+            "action_dim": None,
+            "gamma": float(self.gamma),
+            "eps_clip": float(self.eps_clip),
+            "K_epochs": int(self.K_epochs),
+            "lr_actor": float(self.config.get("lr_actor", 0.0)),
+            "lr_critic": float(self.config.get("lr_critic", 0.0)),
+        }
+        with open(os.path.join(checkpoint_path, meta_filename), "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+
+    def load_safetensors(self, checkpoint_path, filename="ppo_policy.safetensors", strict=True):
+        file_path = os.path.join(checkpoint_path, filename)
+
+        # load_file returns CPU tensors
+        tensor_dict = load_file(file_path)
+
+        # Load into both policies (like your torch.load version)
+        self.policy_old.load_state_dict(tensor_dict, strict=strict)
+        self.policy.load_state_dict(tensor_dict, strict=strict)
+
+        # Make sure models are on the right device
+        self.policy_old.to(self.device)
+        self.policy.to(self.device)
 
 
 
 
-import os
-import csv
-from datetime import datetime
+
 
 class Trainer:
     def __init__(self, env, config):
@@ -245,14 +283,9 @@ class Trainer:
         )
 
         # reward file path (inside rewards/)
-        self.reward_f_name = os.path.join(
-            self.rewards_dir, f"PPO_{self.env_name}_rewards_{run_num:03d}.csv"
-        )
-
         logger.info(f"Run: {self.run_name}")
         logger.info(f"Run folder: {self.run_dir}")
         logger.info(f"Logging at: {self.log_f_name}")
-        logger.info(f"Rewards at: {self.reward_f_name}")
 
         # (optional) write CSV headers once
         self._init_csv(self.log_f_name, header=["episode", "timestep", "reward", "done"])
@@ -363,8 +396,8 @@ class Trainer:
                 # save model weights
                 if time_step % self.config['save_model_freq'] == 0:
                     logger.info("--------------------------------------------------------------------------------------------")
-                    logger.info("saving model at : " + self.directory)
-                    self.agent.save(self.directory)
+                    logger.info("saving model at : " + self.models_dir)
+                    self.agent.save_safetensors(self.models_dir)
                     logger.info("model saved")
                     logger.info("Elapsed Time  : ", datetime.now().replace(microsecond=0) - start_time)
                     logger.info("--------------------------------------------------------------------------------------------")
@@ -393,6 +426,6 @@ class Trainer:
         logger.info("Total training time  : ", end_time - start_time)
         logger.info("============================================================================================")
 
-        np.save(os.path.join(self.reward_folder, f"ppo_{self.env_name}_step_rewards.npy"), np.array(self.step_rewards))
-        np.save(os.path.join(self.reward_folder, f"ppo_{self.env_name}_episode_rewards.npy"), np.array(self.episode_rewards))
-        logger.info(f"Saved step_rewards and episode_rewards to {self.log_dir}")
+        np.save(os.path.join(self.rewards_dir, f"ppo_{self.env_name}_step_rewards.npy"), np.array(self.step_rewards))
+        np.save(os.path.join(self.rewards_dir, f"ppo_{self.env_name}_episode_rewards.npy"), np.array(self.episode_rewards))
+        logger.info(f"Saved step_rewards and episode_rewards to {self.rewards_dir}")
