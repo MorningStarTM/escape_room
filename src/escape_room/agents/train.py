@@ -7,12 +7,12 @@ from src.escape_room.agents.ppo import Trainer
 
 def train_ppo(config:dict):
     gym.envs.register(
-                id='EscapeRoomGame-v0',
+                id='EscapeRoomGame-v1',
                 entry_point='__main__:EscapeRoomEnv',
             )
 
     env = gym.make(
-            "EscapeRoomGame-v0",
+            "EscapeRoomGame-v1",
             render_mode=config.get("render_mode", None),
             tmj_path="src/escape_room/assets/maps/level_one.tmj",
             tmx_path="src/escape_room/assets/maps/level_one.tmx",

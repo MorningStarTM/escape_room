@@ -199,52 +199,95 @@ class PPO:
 
 
 
+import os
+import csv
+from datetime import datetime
+
 class Trainer:
     def __init__(self, env, config):
-        
         self.env = env
         self.env_name = "EscapeRoom"
-        self.agent = PPO(state_dim=config['state_dim'], 
-                         action_dim=config['action_dim'],config=config)
+        self.config = config
+
+        # agent
+        self.agent = PPO(
+            state_dim=config["state_dim"],
+            action_dim=config["action_dim"],
+            config=config
+        )
+
         self.best_score = 0.0
         self.score_history = []
-        self.config = config
-        self.episode_rewards = []  # Stores total reward per episode
-        self.step_rewards = []     # Stores every single reward at each timestep
+        self.episode_rewards = []   # total reward per episode
+        self.step_rewards = []      # reward per step
 
-        self.log_dir = "model_logs"
-        if not os.path.exists(self.log_dir):
-            os.makedirs(self.log_dir)
+        # -----------------------------
+        # Common root folder for everything
+        # -----------------------------
+        self.root_dir = os.path.join("runs", self.env_name)
+        os.makedirs(self.root_dir, exist_ok=True)
 
-        self.log_dir = self.log_dir + '/' + self.env_name + '/'
-        if not os.path.exists(self.log_dir):
-            os.makedirs(self.log_dir)
+        # Make run folders: run_000, run_001, ...
+        run_num = self._next_run_number(self.root_dir)
+        self.run_name = f"run_{run_num:03d}"
 
-        run_num = 0
-        current_num_files = next(os.walk(self.log_dir))[2]
-        run_num = len(current_num_files)
+        self.run_dir = os.path.join(self.root_dir, self.run_name)
+        self.models_dir = os.path.join(self.run_dir, "models")
+        self.logs_dir = os.path.join(self.run_dir, "model_logs")
+        self.rewards_dir = os.path.join(self.run_dir, "rewards")
 
-        #### create new log file for each run
-        self.log_f_name = self.log_dir + '/PPO_' + self.env_name + "_log_" + str(run_num) + ".csv"
+        for d in (self.run_dir, self.models_dir, self.logs_dir, self.rewards_dir):
+            os.makedirs(d, exist_ok=True)
 
-        logger.info("current logging run number for " + self.env_name + " : ", run_num)
-        logger.info("logging at : " + self.log_f_name)
+        # log file path (inside model_logs/)
+        self.log_f_name = os.path.join(
+            self.logs_dir, f"PPO_{self.env_name}_log_{run_num:03d}.csv"
+        )
 
-        self.directory = "Models"
-        if not os.path.exists(self.directory):
-            os.makedirs(self.directory)
+        # reward file path (inside rewards/)
+        self.reward_f_name = os.path.join(
+            self.rewards_dir, f"PPO_{self.env_name}_rewards_{run_num:03d}.csv"
+        )
 
-        self.directory = self.directory + '/' + self.env_name + '/'
-        if not os.path.exists(self.directory):
-            os.makedirs(self.directory)
+        logger.info(f"Run: {self.run_name}")
+        logger.info(f"Run folder: {self.run_dir}")
+        logger.info(f"Logging at: {self.log_f_name}")
+        logger.info(f"Rewards at: {self.reward_f_name}")
 
-        self.reward_folder = 'rewards'
-        if not os.path.exists(self.reward_folder):
-            os.makedirs(self.reward_folder)
+        # (optional) write CSV headers once
+        self._init_csv(self.log_f_name, header=["episode", "timestep", "reward", "done"])
+        self._init_csv(self.reward_f_name, header=["episode", "episode_reward"])
 
-        self.reward_folder = self.reward_folder + '/' + self.env_name + '/'
-        if not os.path.exists(self.reward_folder):
-            os.makedirs(self.reward_folder)
+    @staticmethod
+    def _next_run_number(root_dir: str) -> int:
+        """
+        Counts existing run_* folders and returns the next index.
+        """
+        if not os.path.isdir(root_dir):
+            return 0
+        existing = [
+            name for name in os.listdir(root_dir)
+            if os.path.isdir(os.path.join(root_dir, name)) and name.startswith("run_")
+        ]
+        nums = []
+        for name in existing:
+            try:
+                nums.append(int(name.split("_")[1]))
+            except Exception:
+                pass
+        return (max(nums) + 1) if nums else 0
+
+    @staticmethod
+    def _init_csv(path: str, header):
+        """
+        Create CSV with header if file doesn't exist or is empty.
+        """
+        need_header = (not os.path.exists(path)) or (os.path.getsize(path) == 0)
+        if need_header:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(header)
+
 
 
     def train(self):
