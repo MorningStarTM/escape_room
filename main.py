@@ -3,6 +3,8 @@ import gymnasium as gym
 
 from src.escape_room.gym_envs.escape_room_v1 import EscapeRoomEnv
 from src.escape_room.agents.train import train_ppo
+from src.escape_room.agents.ppo import PPO
+from src.escape_room.utils.eval import evaluate_agent_and_save_gifs
 
 
 def make_env(render_mode="human"):
@@ -108,11 +110,36 @@ def agent_training(render_mode=None):
     train_ppo(config)
 
 
+def eval():
+    config = {
+        "render_mode": "human",     # None for faster training, "human" to watch
+        "time_limit_steps": 500,
+        "gamma": 0.99,
+        "eps_clip": 0.2,
+        "K_epochs": 4,
+        "lr_actor": 1e-4,
+        "lr_critic": 1e-3,
+        "max_training_timesteps": int(3e6),
+        "max_ep_len": 1000,
+        "update_timestep": 1000 * 4,
+        "log_freq": 1000 * 2,
+        "print_freq": 2000 * 5,
+        "save_model_freq": int(1e5),
+        "state_dim": 31,
+        "action_dim": 5,
+    }
+
+    agent = PPO(state_dim=config['state_dim'], action_dim=config['action_dim'], config=config)
+    evaluate_agent_and_save_gifs(agent=agent, make_env=make_env, num_episodes=2, out_dir="eval_gifs", gif_prefix="eval_ep", fps=30)
+
+
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "mode",
-        choices=["test-random", "test-scripted", "agent-training"],
+        choices=["test-random", "test-scripted", "agent-training", "eval"],
         help="Which script to run",
     )
     parser.add_argument(
@@ -130,6 +157,8 @@ def main():
         test_scripted(render_mode="human" if args.human else "human")
     elif args.mode == "agent-training":
         agent_training(render_mode=render_mode)
+    elif args.mode == "eval":
+        eval()
 
 
 if __name__ == "__main__":
