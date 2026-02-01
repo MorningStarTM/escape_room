@@ -118,16 +118,46 @@ def load_tsx(tsx_path: Path):
 class Tileset:
     def __init__(self, firstgid: int, tsx_path: Path):
         self.firstgid = firstgid
-        self.tsx_path = tsx_path
+        self.tsx_path = Path(tsx_path)
 
-        ts = load_tsx(tsx_path)
+        ts = load_tsx(self.tsx_path)
         self.columns = ts["columns"]
         self.tilecount = ts["tilecount"]
         self.tile_w = ts["tilewidth"]
         self.tile_h = ts["tileheight"]
 
-        img_path = (tsx_path.parent / ts["image"]).resolve()
+        # -------- FIX: robust image path resolution --------
+        img_src_raw = ts["image"]  # can be "tiles.png" or a bad path
+        img_src = Path(img_src_raw)
+
+        img_candidates = [
+            (self.tsx_path.parent / img_src),       # as written in TSX
+            (self.tsx_path.parent / img_src.name),  # basename fallback
+        ]
+
+        # Also handle Windows-style backslashes stored in TSX
+        if "\\" in img_src_raw:
+            img_src2 = Path(img_src_raw.replace("\\", "/"))
+            img_candidates.insert(1, (self.tsx_path.parent / img_src2))
+            img_candidates.append(self.tsx_path.parent / img_src2.name)
+
+        img_path = None
+        for c in img_candidates:
+            c = c.resolve()
+            if c.exists():
+                img_path = c
+                break
+
+        if img_path is None:
+            raise FileNotFoundError(
+                "Tileset image not found.\n"
+                f"tsx: {self.tsx_path}\n"
+                f"image source in tsx: {img_src_raw}\n"
+                "tried:\n  " + "\n  ".join(str(x.resolve()) for x in img_candidates)
+            )
+
         self.image = pygame.image.load(str(img_path)).convert_alpha()
+        # -----------------------------------------------
 
         self.lastgid = self.firstgid + self.tilecount - 1
         self.cache = {}  # key: (gid, fh, fv, fd) -> surface
@@ -136,10 +166,6 @@ class Tileset:
         return self.firstgid <= gid <= self.lastgid
 
     def get_tile_surface(self, raw_gid: int):
-        """
-        raw_gid is the number from layer data (may include flip flags).
-        Returns a pygame.Surface for the tile.
-        """
         if raw_gid == 0:
             return None
 
@@ -147,7 +173,7 @@ class Tileset:
         fv = bool(raw_gid & FLIP_V)
         fd = bool(raw_gid & FLIP_D)
 
-        gid = raw_gid & GID_MASK  # remove flags
+        gid = raw_gid & GID_MASK
         if not self.contains_gid(gid):
             return None
 
@@ -164,11 +190,7 @@ class Tileset:
         surf = pygame.Surface((self.tile_w, self.tile_h), pygame.SRCALPHA)
         surf.blit(self.image, (0, 0), rect)
 
-        # Apply flips/diagonal.
-        # Note: Diagonal flip in Tiled is not just a simple rotate in all cases,
-        # but this approximation works for most orthogonal tiles.
         if fd:
-            # swap axes (approx): rotate 90 then flip horizontal
             surf = pygame.transform.rotate(surf, -90)
             surf = pygame.transform.flip(surf, True, False)
 
@@ -188,25 +210,52 @@ class TiledMap:
         self.height = self.data["height"]
         self.tile_w = self.data["tilewidth"]
         self.tile_h = self.data["tileheight"]
-        self._static_world = None   # cache surface
-        self._static_dirty = True   # if map changes later, set True
+        self._static_world = None
+        self._static_dirty = True
 
-        # layers
         self.layers = [ly for ly in self.data["layers"] if ly["type"] == "tilelayer"]
         self.tile_layers = [ly for ly in self.data["layers"] if ly["type"] == "tilelayer"]
         self.object_layers = [ly for ly in self.data["layers"] if ly["type"] == "objectgroup"]
 
-
-        # tilesets (multiple)
+        # -------- FIX: robust TSX path resolution --------
         self.tilesets = []
+        tmj_dir = self.tmj_path.parent
+
         for ts_entry in self.data["tilesets"]:
             firstgid = ts_entry["firstgid"]
-            src = ts_entry["source"]  # e.g. "escape.tsx", "side door.tsx"
-            tsx_path = (self.tmj_path.parent / src).resolve()
+            src_raw = ts_entry["source"]  # might be bad (old relative path)
+            src = Path(src_raw)
+
+            candidates = [
+                (tmj_dir / src),       # as written in TMJ
+                (tmj_dir / src.name),  # basename fallback (most important)
+            ]
+
+            # handle Windows backslashes inside tmj json too
+            if "\\" in src_raw:
+                src2 = Path(src_raw.replace("\\", "/"))
+                candidates.insert(1, tmj_dir / src2)
+                candidates.append(tmj_dir / src2.name)
+
+            tsx_path = None
+            for c in candidates:
+                c = c.resolve()
+                if c.exists():
+                    tsx_path = c
+                    break
+
+            if tsx_path is None:
+                raise FileNotFoundError(
+                    "Tileset TSX not found.\n"
+                    f"tmj: {self.tmj_path}\n"
+                    f"source in tmj: {src_raw}\n"
+                    "tried:\n  " + "\n  ".join(str(x.resolve()) for x in candidates)
+                )
+
             self.tilesets.append(Tileset(firstgid, tsx_path))
 
-        # sort by firstgid so we can pick correct tileset
         self.tilesets.sort(key=lambda t: t.firstgid)
+
 
         # quick sanity: your map uses 16x16 tiles, tilesets should match
         # (not required, but helpful)
