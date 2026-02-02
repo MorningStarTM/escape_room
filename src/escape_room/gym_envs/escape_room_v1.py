@@ -90,7 +90,7 @@ def load_rooms_from_tmx(tmx_path: str, rooms_layer_name: str = "Rooms") -> List[
         rid = obj.get("name") or obj.get("id") or f"room_{len(rooms)}"
         rooms.append(Room(room_id=str(rid), rect=pygame.Rect(x, y, w, h)))
 
-    #print(f"[ROOMS] Loaded {len(rooms)} rooms from '{rooms_layer_name}'.")
+    print(f"[ROOMS] Loaded {len(rooms)} rooms from '{rooms_layer_name}'.")
     return rooms
 
 
@@ -208,6 +208,10 @@ class EscapeRoomEnv(gym.Env):
         self.step_count = 0
         self.visited_rooms: Set[str] = set()
         self._current_room_id: Optional[str] = None  # for entry-based reward
+
+        self._pending_room_id = None
+        self._pending_room_steps = 0
+        self._room_confirm_steps = 6   
 
     # ---------------- Gym API ----------------
 
@@ -540,37 +544,50 @@ class EscapeRoomEnv(gym.Env):
         }
 
     def _room_id_for_player(self, player_rect: pygame.Rect) -> Optional[str]:
+        # Use feet point (stable for top-down)
+        p = player_rect.midbottom
         for r in self.rooms:
-            if r.rect.colliderect(player_rect):
+            if r.rect.collidepoint(player_rect.midbottom):
                 return r.room_id
         return None
 
     def _room_entry_reward(self) -> float:
-        """
-        ENTRY-based:
-          - on entering a room first time: +5
-          - on entering a visited room again: -0.5
-          - staying in same room: 0
-          - in no room: 0
-        """
-        assert self.player is not None
-
         now = self._room_id_for_player(self.player.rect)
 
-        # only reward when room changes (entry event)
+        # SAME state (including None)
         if now == self._current_room_id:
+            self._pending_room_id = None
+            self._pending_room_steps = 0
             return 0.0
 
-        self._current_room_id = now
+        # start / continue debounce (for both room and None)
+        if now != self._pending_room_id:
+            self._pending_room_id = now
+            self._pending_room_steps = 1
+            return 0.0
 
+        self._pending_room_steps += 1
+        if self._pending_room_steps < self._room_confirm_steps:
+            return 0.0
+
+        # ---- CONFIRMED TRANSITION ----
+        prev = self._current_room_id
+        self._current_room_id = now
+        self._pending_room_id = None
+        self._pending_room_steps = 0
+
+        # exiting to None → no reward, but state updates!
         if now is None:
             return 0.0
 
+        # first time entering this room
         if now not in self.visited_rooms:
             self.visited_rooms.add(now)
-            return 5.0
-        else:
-            return -0.5
+            return 1.0
+
+        # re-entering visited room → penalty
+        return -0.5
+
         
     
     def _load_object_rects_from_tmx(self, tmx_path: str, layer_name: str) -> List[pygame.Rect]:
