@@ -90,7 +90,7 @@ def load_rooms_from_tmx(tmx_path: str, rooms_layer_name: str = "Rooms") -> List[
         rid = obj.get("name") or obj.get("id") or f"room_{len(rooms)}"
         rooms.append(Room(room_id=str(rid), rect=pygame.Rect(x, y, w, h)))
 
-    print(f"[ROOMS] Loaded {len(rooms)} rooms from '{rooms_layer_name}'.")
+    #print(f"[ROOMS] Loaded {len(rooms)} rooms from '{rooms_layer_name}'.")
     return rooms
 
 
