@@ -86,7 +86,7 @@
   <object id="31" x="17.0793" y="337.791" width="110.699" height="156.244"/>
   <object id="32" x="16.4468" y="158.774" width="110.699" height="158.142"/>
  </objectgroup>
- <objectgroup id="6" name="Goal_Room" visible="0">
-  <object id="33" x="16.4468" y="15.1816" width="48.0754" height="128.411"/>
+ <objectgroup id="6" name="Goal_Room">
+  <object id="33" x="93.62" y="41.7494" width="25.303" height="46.8098"/>
  </objectgroup>
 </map>
