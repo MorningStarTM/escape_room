@@ -64,34 +64,31 @@ class Room:
 
 
 def load_rooms_from_tmx(tmx_path: str, rooms_layer_name: str = "Rooms") -> List[Room]:
-    """
-    TMX must have an <objectgroup name="Rooms"> where each <object> is a rectangle.
-    Uses object 'name' if present else uses object 'id'.
-    """
-    rooms: List[Room] = []
+    rects = []
     tree = ET.parse(tmx_path)
     root = tree.getroot()
 
-    rooms_group = None
     for og in root.findall("objectgroup"):
-        if og.get("name") == rooms_layer_name:
-            rooms_group = og
-            break
+        if og.get("name") != rooms_layer_name:
+            continue
+        for obj in og.findall("object"):
+            x = int(float(obj.get("x", "0")))
+            y = int(float(obj.get("y", "0")))
+            w = int(float(obj.get("width", "0")))
+            h = int(float(obj.get("height", "0")))
+            if w > 0 and h > 0:
+                rects.append(pygame.Rect(x, y, w, h))
+        break
 
-    if rooms_group is None:
-        #print(f"[ROOMS] No object layer named '{rooms_layer_name}' found in TMX: {tmx_path}")
-        return rooms
+    if not rects:
+        return []
 
-    for obj in rooms_group.findall("object"):
-        x = int(float(obj.get("x", "0")))
-        y = int(float(obj.get("y", "0")))
-        w = int(float(obj.get("width", "0")))
-        h = int(float(obj.get("height", "0")))
-        rid = obj.get("name") or obj.get("id") or f"room_{len(rooms)}"
-        rooms.append(Room(room_id=str(rid), rect=pygame.Rect(x, y, w, h)))
+    merged = rects[0].copy()
+    for r in rects[1:]:
+        merged.union_ip(r)
 
-    #print(f"[ROOMS] Loaded {len(rooms)} rooms from '{rooms_layer_name}'.")
-    return rooms
+    return [Room(room_id="RoomsMerged", rect=merged)]
+
 
 
 # -------------------- Key proxy (so we DON'T change your Player.update) --------------------
@@ -279,8 +276,13 @@ class EscapeRoomEnv(gym.Env):
 
         # rooms from TMX (for your reward)
         self.rooms = load_rooms_from_tmx(self.tmx_path, rooms_layer_name=self.rooms_layer_name)
+        #print("[ROOMS] count =", len(self.rooms), "sample ids =", [r.room_id for r in self.rooms[:10]])
+
         self.goal_rects = self._load_object_rects_from_tmx(self.tmx_path, self.goal_layer_name)
         self._goal_reached = False
+        #print("[GOAL] rects:", [(r.x, r.y, r.w, r.h) for r in self.goal_rects])
+
+        
 
         # pre-render base map once
         self.base_map = pygame.Surface((self.world_w, self.world_h), pygame.SRCALPHA)
@@ -317,7 +319,8 @@ class EscapeRoomEnv(gym.Env):
 
         # world working surface
         self.world_frame = pygame.Surface((self.world_w, self.world_h), pygame.SRCALPHA)
-
+        for gr in self.goal_rects:
+            pygame.draw.rect(self.world_frame, (255, 0, 0), gr, 2)
         # player
         anim = load_player_animations(idle_path=idle_path, walk_path=walk_path, run_path=run_path)
 
@@ -429,10 +432,25 @@ class EscapeRoomEnv(gym.Env):
         self.player._sync_rect_to_pos()
 
         # ----- reward: room visit (ENTRY-BASED) -----
-        reward += self._room_entry_reward()
+        room_r = self._room_entry_reward()
+        reward += room_r
+
         goal_hit = any(gr.colliderect(self.player.rect) for gr in self.goal_rects)
+        goal_r = 0.0
+        # if goal_hit:
+        #     print("[GOAL HIT] step", self.step_count,
+        #         "player_rect", self.player.rect,
+        #         "goal_rects", [(r.x,r.y,r.w,r.h) for r in self.goal_rects])
         if goal_hit and not self._goal_reached:
-            reward += self.goal_reward
+            goal_r = self.goal_reward
+            reward += goal_r
+            self._goal_reached = True
+            if self.terminate_on_goal:
+                terminated = True
+
+        if room_r != 0.0 or goal_r != 0.0:
+            #print(f"step {self.step_count} room_r {room_r} goal_hit {goal_hit} goal_r {goal_r} _goal_reached {self._goal_reached}")
+
             self._goal_reached = True
             if self.terminate_on_goal:
                 terminated = True
