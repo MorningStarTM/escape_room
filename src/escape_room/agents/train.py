@@ -14,8 +14,8 @@ def train_ppo(config:dict):
     env = gym.make(
             "EscapeRoomGame-v1",
             render_mode=config.get("render_mode", None),
-            tmj_path="src/escape_room/assets/maps/level_one.tmj",
-            tmx_path="src/escape_room/assets/maps/level_one.tmx",
+            tmj_path="src/escape_room/assets/maps/level_two.tmj",
+            tmx_path="src/escape_room/assets/maps/level_two.tmx",
             collision_layer_name="Collision",
             doors_layer_name="Doors",
             door_tiles_layer_name="DoorsTiles",
