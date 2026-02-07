@@ -22,6 +22,7 @@ def evaluate_agent_and_save_gifs(
     out_dir="eval_gifs",
     gif_prefix="eval_ep",
     fps=30,
+    mode=None,
     max_steps=None,
     seed=None,
 ):
@@ -37,7 +38,7 @@ def evaluate_agent_and_save_gifs(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Create env in rgb_array mode for capturing frames
-    env = make_env(render_mode="rgb_array")
+    env = make_env(render_mode=mode)
 
     scores = []
 
