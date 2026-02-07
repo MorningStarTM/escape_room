@@ -1,6 +1,7 @@
 # src/escape_room/gym_envs/escape_room_env.py
 from __future__ import annotations
 
+import os
 import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -55,6 +56,69 @@ def nearest_door_to_interact(doors, player_rect, max_dist=50):
     return best
 
 
+
+
+@dataclass
+class Lever:
+    lever_id: str
+    rect: pygame.Rect
+    on: bool = False
+
+    def can_interact(self, player_rect: pygame.Rect, max_dist_px: int = 60) -> bool:
+        dx = player_rect.centerx - self.rect.centerx
+        dy = player_rect.centery - self.rect.centery
+        return (dx * dx + dy * dy) <= (max_dist_px * max_dist_px)
+
+    def toggle(self):
+        self.on = not self.on
+
+
+def load_levers_from_tmx(tmx_path: str, layer_name: str = "Liver") -> List[Lever]:
+    """
+    Reads TMX objectgroup named 'Liver' (your screenshot) and returns Lever rects.
+    Also supports fallback to 'Lever' if 'Liver' not found.
+    """
+    tree = ET.parse(tmx_path)
+    root = tree.getroot()
+
+    def _read_layer(name: str) -> List[Lever]:
+        levers: List[Lever] = []
+        for og in root.findall("objectgroup"):
+            if og.get("name") != name:
+                continue
+            for idx, obj in enumerate(og.findall("object")):
+                x = int(float(obj.get("x", "0")))
+                y = int(float(obj.get("y", "0")))
+                w = int(float(obj.get("width", "0")))
+                h = int(float(obj.get("height", "0")))
+                if w <= 0 or h <= 0:
+                    continue
+                oid = obj.get("name") or f"{name}_{idx}"
+                levers.append(Lever(lever_id=str(oid), rect=pygame.Rect(x, y, w, h), on=False))
+            break
+        return levers
+
+    levers = _read_layer(layer_name)
+    if not levers and layer_name == "Liver":
+        levers = _read_layer("Lever")  # fallback
+    return levers
+
+
+def nearest_lever_to_interact(levers: List[Lever], player_rect: pygame.Rect, max_dist: int = 60) -> Lever | None:
+    best = None
+    best_d2 = 10**18
+    for lv in levers:
+        if lv.can_interact(player_rect, max_dist_px=max_dist):
+            dx = player_rect.centerx - lv.rect.centerx
+            dy = player_rect.centery - lv.rect.centery
+            d2 = dx*dx + dy*dy
+            if d2 < best_d2:
+                best_d2 = d2
+                best = lv
+    return best
+
+
+
 # -------------------- room loader (TMX objectgroup) --------------------
 
 @dataclass(frozen=True)
@@ -64,30 +128,26 @@ class Room:
 
 
 def load_rooms_from_tmx(tmx_path: str, rooms_layer_name: str = "Rooms") -> List[Room]:
-    rects = []
+    rooms: List[Room] = []
     tree = ET.parse(tmx_path)
     root = tree.getroot()
 
     for og in root.findall("objectgroup"):
         if og.get("name") != rooms_layer_name:
             continue
-        for obj in og.findall("object"):
+        for idx, obj in enumerate(og.findall("object")):
             x = int(float(obj.get("x", "0")))
             y = int(float(obj.get("y", "0")))
             w = int(float(obj.get("width", "0")))
             h = int(float(obj.get("height", "0")))
-            if w > 0 and h > 0:
-                rects.append(pygame.Rect(x, y, w, h))
+            if w <= 0 or h <= 0:
+                continue
+            rid = obj.get("name") or f"Room_{idx}"
+            rooms.append(Room(room_id=str(rid), rect=pygame.Rect(x, y, w, h)))
         break
 
-    if not rects:
-        return []
+    return rooms
 
-    merged = rects[0].copy()
-    for r in rects[1:]:
-        merged.union_ip(r)
-
-    return [Room(room_id="RoomsMerged", rect=merged)]
 
 
 
@@ -122,8 +182,8 @@ class EscapeRoomEnv(gym.Env):
     def __init__(
         self,
         render_mode: Optional[str] = None,
-        tmj_path: str = "src/escape_room/assets/maps/level_one.tmj",
-        tmx_path: str = "src/escape_room/assets/maps/level_one.tmx",
+        tmj_path: str = "src/escape_room/assets/maps/level_two.tmj",
+        tmx_path: str = "src/escape_room/assets/maps/level_two.tmx",
         collision_layer_name: str = "Collision",
         doors_layer_name: str = "Doors",
         door_tiles_layer_name: str = "DoorsTiles",
@@ -162,7 +222,11 @@ class EscapeRoomEnv(gym.Env):
         self.debug_rays = bool(debug_rays)
 
         # actions: 0 noop, 1 up, 2 down, 3 left, 4 right, 5 interact
-        self.action_space = spaces.Discrete(6)
+        self.action_space = spaces.Discrete(7)
+
+        # levers + goal unlock rule
+        self.levers: List[Lever] = []
+        self.required_levers_on: int = 0
 
         # observation: you can replace later with real rays etc.
         # For now: [px_norm, py_norm] only (very simple but valid)
@@ -175,12 +239,8 @@ class EscapeRoomEnv(gym.Env):
         )
 
         # observation: normalized ray distances in [0,1]
-        self.observation_space = spaces.Box(
-            low=0.0,
-            high=1.0,
-            shape=(self.n_rays,),
-            dtype=np.float32,
-        )
+        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(33,), dtype=np.float32)
+
 
         # pygame render
         self._screen: Optional[pygame.Surface] = None
@@ -273,14 +333,27 @@ class EscapeRoomEnv(gym.Env):
             doors_layer_name=self.doors_layer_name,
             door_tiles_layer_name=self.door_tiles_layer_name,
         )
-
+        print("[DOORS] count =", len(self.doors))
         # rooms from TMX (for your reward)
         self.rooms = load_rooms_from_tmx(self.tmx_path, rooms_layer_name=self.rooms_layer_name)
         #print("[ROOMS] count =", len(self.rooms), "sample ids =", [r.room_id for r in self.rooms[:10]])
 
         self.goal_rects = self._load_object_rects_from_tmx(self.tmx_path, self.goal_layer_name)
         self._goal_reached = False
+        gr = self.goal_rects[0]
+        self.goal_center = pygame.Vector2(gr.centerx, gr.centery)
         #print("[GOAL] rects:", [(r.x, r.y, r.w, r.h) for r in self.goal_rects])
+
+        # levers from TMX (layer name in your screenshot is "Liver")
+        self.levers = load_levers_from_tmx(self.tmx_path, layer_name="Liver")
+
+        # rule: required = no_room - 3   (no_room is always odd, as you said)
+        no_rooms = len(self.rooms)
+        self.required_levers_on = max(0, no_rooms - 3)
+
+        # reset lever states explicitly
+        for lv in self.levers:
+            lv.on = False
 
         
 
@@ -371,7 +444,6 @@ class EscapeRoomEnv(gym.Env):
         # ----- apply action -> keys for your existing Player.update() -----
         pressed = set()
 
-        # WASD + arrows (support both)
         if action == 1:
             pressed.add(pygame.K_w); pressed.add(pygame.K_UP)
         elif action == 2:
@@ -380,30 +452,25 @@ class EscapeRoomEnv(gym.Env):
             pressed.add(pygame.K_a); pressed.add(pygame.K_LEFT)
         elif action == 4:
             pressed.add(pygame.K_d); pressed.add(pygame.K_RIGHT)
+
         elif action == 5:
-            door = nearest_door_to_interact(self.doors, self.player.rect, max_dist=self.max_interact_dist)
-
-            # if door is None:
-            #     #print(f"[INTERACT] No door in range. player_center={self.player.rect.center} max_dist={self.max_interact_dist}")
-            #     return
+            # DOOR INTERACT
+            door = nearest_door_to_interact(
+                self.doors, self.player.rect, max_dist=self.max_interact_dist
+            )
+            
             if door is not None:
-                # Try to read door state safely (different implementations use different fields)
-                before = getattr(door, "open", getattr(door, "is_open", None))
-                # print(
-                #     f"[INTERACT] Door FOUND. before_open={before} "
-                #     f"player_center={self.player.rect.center} trigger_center={getattr(door,'trigger_rect',None).center if hasattr(door,'trigger_rect') else None}"
-                # )
-
                 door.toggle()
 
-                after = getattr(door, "open", getattr(door, "is_open", None))
-                #print(f"[INTERACT] Door TOGGLED. after_open={after}")
+        elif action == 6:
+            # LEVER TOGGLE (NEW)
+            lv = nearest_lever_to_interact(
+                self.levers, self.player.rect, max_dist=self.max_interact_dist
+            )
+            if lv is not None:
+                lv.toggle()
+                print(f"[LEVER] toggled {lv.lever_id} to {'ON' if lv.on else 'OFF'}")
 
-                # useful debug: blockers count and tiles count
-                # if hasattr(door, "blocker_rects"):
-                #     print(f"[INTERACT] blocker_rects_count={len(door.blocker_rects())}")
-                # if hasattr(door, "tiles_cells"):
-                #     print(f"[INTERACT] tiles_cells_count={len(door.tiles_cells)}")
 
         keys = KeyProxy(pressed)
 
@@ -437,20 +504,10 @@ class EscapeRoomEnv(gym.Env):
 
         goal_hit = any(gr.colliderect(self.player.rect) for gr in self.goal_rects)
         goal_r = 0.0
-        # if goal_hit:
-        #     print("[GOAL HIT] step", self.step_count,
-        #         "player_rect", self.player.rect,
-        #         "goal_rects", [(r.x,r.y,r.w,r.h) for r in self.goal_rects])
+
         if goal_hit and not self._goal_reached:
             goal_r = self.goal_reward
             reward += goal_r
-            self._goal_reached = True
-            if self.terminate_on_goal:
-                terminated = True
-
-        if room_r != 0.0 or goal_r != 0.0:
-            #print(f"step {self.step_count} room_r {room_r} goal_hit {goal_hit} goal_r {goal_r} _goal_reached {self._goal_reached}")
-
             self._goal_reached = True
             if self.terminate_on_goal:
                 terminated = True
@@ -461,6 +518,7 @@ class EscapeRoomEnv(gym.Env):
         if self.render_mode == "human":
             self.render()
 
+
         return obs, reward, terminated, truncated, info
 
     def render(self):
@@ -470,6 +528,9 @@ class EscapeRoomEnv(gym.Env):
         if self._screen is None:
             if not pygame.get_init():
                 pygame.init()
+
+            os.environ["SDL_VIDEO_CENTERED"] = "1"
+            
             self._screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
             pygame.display.set_caption("Escape Room (Gym Env)")
             self._clock = pygame.time.Clock()
@@ -530,6 +591,10 @@ class EscapeRoomEnv(gym.Env):
         if self.debug_rays:
             self.ray_sensor.draw(self.world_frame)
 
+        for lv in self.levers:
+            color = (0, 200, 0) if lv.on else (200, 0, 0)
+            pygame.draw.rect(self.world_frame, color, lv.rect, 2)
+
         return None
 
     def close(self):
@@ -540,26 +605,40 @@ class EscapeRoomEnv(gym.Env):
 
     # ---------------- internal helpers ----------------
 
-    def _get_obs(self) -> np.ndarray:
-        # origin = player feet position (your player uses rect.midbottom)
-        origin = pygame.Vector2(self.player.rect.midbottom)
+    def _get_obs(self):
+        assert self.player is not None
 
+        # 1) update ray sensor each step/reset
+        origin = pygame.Vector2(self.player.rect.centerx, self.player.rect.centery)
         facing = self._player_facing_angle_rad()
         obstacles = self._get_ray_obstacles()
 
-        dists = self.ray_sensor.update(origin, facing, obstacles)  # list[float]
-        dists = np.asarray(dists, dtype=np.float32)
+        self.ray_sensor.update(origin, facing, obstacles)
 
-        # normalize to [0,1]
-        obs = np.clip(dists / float(self.ray_max_dist), 0.0, 1.0).astype(np.float32)
+        # 2) distances -> numpy
+        rays = np.array(self.ray_sensor.distances, dtype=np.float32)  # (31,)
+        rays = rays / float(self.ray_sensor.max_dist)                 # normalize to [0,1]
+
+        # 3) goal relative position
+        px, py = self.player.rect.centerx, self.player.rect.centery
+        dx = (self.goal_center.x - px) / float(self.world_w)
+        dy = (self.goal_center.y - py) / float(self.world_h)
+
+        obs = np.concatenate([rays, np.array([dx, dy], dtype=np.float32)], axis=0)
         return obs
 
+
     def _get_info(self) -> Dict[str, Any]:
+        on_count = sum(1 for lv in self.levers if lv.on)
         return {
             "step": self.step_count,
             "visited_rooms": len(self.visited_rooms),
             "current_room": self._current_room_id,
+            "lever_on": on_count,
+            "lever_required": self.required_levers_on,
+            "goal_unlocked": (on_count == self.required_levers_on),
         }
+
 
     def _room_id_for_player(self, player_rect: pygame.Rect) -> Optional[str]:
         # Use feet point (stable for top-down)
