@@ -333,7 +333,7 @@ class EscapeRoomEnv(gym.Env):
             doors_layer_name=self.doors_layer_name,
             door_tiles_layer_name=self.door_tiles_layer_name,
         )
-        print("[DOORS] count =", len(self.doors))
+        #print("[DOORS] count =", len(self.doors))
         # rooms from TMX (for your reward)
         self.rooms = load_rooms_from_tmx(self.tmx_path, rooms_layer_name=self.rooms_layer_name)
         #print("[ROOMS] count =", len(self.rooms), "sample ids =", [r.room_id for r in self.rooms[:10]])
