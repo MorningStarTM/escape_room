@@ -212,36 +212,51 @@ class Tileset:
         self.tile_h = ts["tileheight"]
 
         # -------- FIX: robust image path resolution --------
-        img_src_raw = ts["image"]  # can be "tiles.png" or a bad path
+        img_src_raw = ts["image"]  # e.g. "Tileset.png" or "src/escape_room/assets/images/Tileset.png"
         img_src = Path(img_src_raw)
 
-        img_candidates = [
-            (self.tsx_path.parent / img_src),       # as written in TSX
-            (self.tsx_path.parent / img_src.name),  # basename fallback
-        ]
+        # If TSX already contains an absolute path, just use it
+        if img_src.is_absolute() and img_src.exists():
+            img_path = img_src
+        else:
+            img_candidates = []
 
-        # Also handle Windows-style backslashes stored in TSX
-        if "\\" in img_src_raw:
-            img_src2 = Path(img_src_raw.replace("\\", "/"))
-            img_candidates.insert(1, (self.tsx_path.parent / img_src2))
-            img_candidates.append(self.tsx_path.parent / img_src2.name)
+            # 1) relative to the TSX folder (normal tiled behavior)
+            img_candidates.append(self.tsx_path.parent / img_src)
+            img_candidates.append(self.tsx_path.parent / img_src.name)
 
-        img_path = None
-        for c in img_candidates:
-            c = c.resolve()
-            if c.exists():
-                img_path = c
-                break
+            # 2) also try walking UP the directory tree (so "src/escape_room/..." works)
+            #    This will find: E:\Projects\escape_room\src\escape_room\assets\images\Tileset.png
+            for parent in self.tsx_path.parents:
+                img_candidates.append(parent / img_src)
+                img_candidates.append(parent / img_src.name)
 
-        if img_path is None:
-            raise FileNotFoundError(
-                "Tileset image not found.\n"
-                f"tsx: {self.tsx_path}\n"
-                f"image source in tsx: {img_src_raw}\n"
-                "tried:\n  " + "\n  ".join(str(x.resolve()) for x in img_candidates)
-            )
+            # 3) handle backslashes stored in TSX (windows paths)
+            if "\\" in img_src_raw:
+                img_src2 = Path(img_src_raw.replace("\\", "/"))
+                for parent in self.tsx_path.parents:
+                    img_candidates.append(parent / img_src2)
+                    img_candidates.append(parent / img_src2.name)
+
+            img_path = None
+            for c in img_candidates:
+                c = c.resolve()
+                if c.exists():
+                    img_path = c
+                    break
+
+            if img_path is None:
+                raise FileNotFoundError(
+                    "Tileset image not found.\n"
+                    f"tsx: {self.tsx_path}\n"
+                    f"image source in tsx: {img_src_raw}\n"
+                    "tried:\n  " + "\n  ".join(str(x.resolve()) for x in img_candidates[:12]) +
+                    ("\n  ... (more tried)" if len(img_candidates) > 12 else "")
+                )
 
         self.image = pygame.image.load(str(img_path)).convert_alpha()
+        # -----------------------------------------------
+
         # -----------------------------------------------
 
         self.lastgid = self.firstgid + self.tilecount - 1
