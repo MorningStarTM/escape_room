@@ -469,7 +469,7 @@ class EscapeRoomEnv(gym.Env):
             )
             if lv is not None:
                 lv.toggle()
-                print(f"[LEVER] toggled {lv.lever_id} to {'ON' if lv.on else 'OFF'}")
+                #print(f"[LEVER] toggled {lv.lever_id} to {'ON' if lv.on else 'OFF'}")
 
 
         keys = KeyProxy(pressed)

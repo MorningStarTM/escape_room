@@ -36,7 +36,7 @@ def build_doors_from_tiled(tmap, doors_layer_name="Doors", door_tiles_layer_name
 
     doors_layer = tmap.get_object_layer_by_name(doors_layer_name)
     if not doors_layer:
-        print(f"[DOORS] No object layer named '{doors_layer_name}' found.")
+        #print(f"[DOORS] No object layer named '{doors_layer_name}' found.")
         return doors
 
     has_door_tiles_layer = (tmap.get_tile_layer_by_name(door_tiles_layer_name) is not None)
@@ -101,7 +101,7 @@ def build_doors_from_tmx(
             break
 
     if doors_group is None:
-        print(f"[DOORS] No object layer named '{doors_layer_name}' found in TMX: {tmx_path}")
+        #print(f"[DOORS] No object layer named '{doors_layer_name}' found in TMX: {tmx_path}")
         return doors
 
     # We only compute tiles_cells if:
