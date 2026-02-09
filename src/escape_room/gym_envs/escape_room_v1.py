@@ -291,10 +291,9 @@ class EscapeRoomEnv(gym.Env):
         # If you have door rects, include only the closed ones
         # (adjust attribute names depending on your Door class)
         for door in self.doors:
-            if getattr(door, "is_open", False):
+            if door.open:
                 continue
-            if hasattr(door, "rect"):
-                obstacles.append(door.rect)
+            obstacles.append(door.blocker_rect)
 
         return obstacles
 
@@ -333,6 +332,10 @@ class EscapeRoomEnv(gym.Env):
             doors_layer_name=self.doors_layer_name,
             door_tiles_layer_name=self.door_tiles_layer_name,
         )
+        print("[DOORS DEBUG] count =", len(self.doors))
+        print("[DOORS DEBUG] goal doors =", [(getattr(d, "is_goal", False), d.blocker_rect) for d in self.doors])
+
+
         #print("[DOORS] count =", len(self.doors))
         # rooms from TMX (for your reward)
         self.rooms = load_rooms_from_tmx(self.tmx_path, rooms_layer_name=self.rooms_layer_name)
@@ -454,13 +457,16 @@ class EscapeRoomEnv(gym.Env):
             pressed.add(pygame.K_d); pressed.add(pygame.K_RIGHT)
 
         elif action == 5:
-            # DOOR INTERACT
-            door = nearest_door_to_interact(
-                self.doors, self.player.rect, max_dist=self.max_interact_dist
-            )
-            
+            door = nearest_door_to_interact(self.doors, self.player.rect, max_dist=self.max_interact_dist)
             if door is not None:
-                door.toggle()
+                on_count = sum(1 for lv in self.levers if lv.on)
+                goal_unlocked = (on_count >= self.required_levers_on)
+
+                # if this is the goal door, don’t allow toggle until unlocked
+                if getattr(door, "is_goal", False) and not goal_unlocked:
+                    pass
+                else:
+                    door.toggle()
 
         elif action == 6:
             # LEVER TOGGLE (NEW)
@@ -502,10 +508,15 @@ class EscapeRoomEnv(gym.Env):
         room_r = self._room_entry_reward()
         reward += room_r
 
+        # unlock status
+        on_count = sum(1 for lv in self.levers if lv.on)
+        goal_unlocked = (on_count >= self.required_levers_on)
+
+        # goal reward ONLY if unlocked
         goal_hit = any(gr.colliderect(self.player.rect) for gr in self.goal_rects)
         goal_r = 0.0
 
-        if goal_hit and not self._goal_reached:
+        if goal_unlocked and goal_hit and not self._goal_reached:
             goal_r = self.goal_reward
             reward += goal_r
             self._goal_reached = True
@@ -528,9 +539,7 @@ class EscapeRoomEnv(gym.Env):
         if self._screen is None:
             if not pygame.get_init():
                 pygame.init()
-
             os.environ["SDL_VIDEO_CENTERED"] = "1"
-            
             self._screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
             pygame.display.set_caption("Escape Room (Gym Env)")
             self._clock = pygame.time.Clock()
@@ -542,22 +551,19 @@ class EscapeRoomEnv(gym.Env):
                 return None
 
         assert self.world_frame is not None
-        assert self.base_map is not None
         assert self.tmap is not None
         assert self.player is not None
 
-        # draw base
+        # ---------- draw world_frame ----------
         self.world_frame.fill((20, 20, 20))
         self.tmap.draw_cached(self.world_frame, camera_x=0, camera_y=0)
 
-
-        # draw door tiles only if CLOSED (skip cells for open doors)
+        # draw DoorsTiles if CLOSED (skip open)
         skip_cells = set()
         for d in self.doors:
             if d.open:
                 skip_cells |= d.tiles_cells
 
-        # draw DoorsTiles if it exists in TMJ (if missing, your TiledMap method should handle/print)
         try:
             self.tmap.draw_tile_layer(
                 self.world_frame,
@@ -567,35 +573,43 @@ class EscapeRoomEnv(gym.Env):
                 skip_cells=skip_cells,
             )
         except Exception:
-            # if your draw_tile_layer throws when layer missing, ignore
             pass
 
-        # player sprite
+        # player
         self.world_frame.blit(self.player.image, self.player.rect.topleft)
 
-        # rays
-        if self.debug_rays and hasattr(self.player, "ray_sensor") and self.player.ray_sensor:
-            self.player.ray_sensor.draw(self.world_frame)
+        # your ray sensor (ONLY ONCE)
+        if self.debug_rays:
+            # draw the env ray sensor you actually update in _get_obs()
+            self.ray_sensor.draw(self.world_frame)
 
-        # fit to screen
+        # levers
+        for lv in self.levers:
+            color = (0, 200, 0) if lv.on else (200, 0, 0)
+            pygame.draw.rect(self.world_frame, color, lv.rect, 2)
+
+        # doors debug
+        for d in self.doors:
+            col = (255, 255, 0) if getattr(d, "is_goal", False) else (0, 150, 255)
+            if d.open:
+                col = (100, 100, 100)
+            pygame.draw.rect(self.world_frame, col, d.blocker_rect, 2)
+            pygame.draw.rect(self.world_frame, (255, 0, 255), d.trigger_rect, 1)
+
+        # ---------- present to screen ----------
         blit_fit(self._screen, self.world_frame)
         pygame.display.flip()
 
         if self._clock is not None:
             self._clock.tick(self.metadata["render_fps"])
 
+        # ---------- return rgb_array AFTER presenting ----------
         if self.render_mode == "rgb_array":
             arr = pygame.surfarray.array3d(self._screen)  # (W,H,3)
             return np.transpose(arr, (1, 0, 2))  # (H,W,3)
-        
-        if self.debug_rays:
-            self.ray_sensor.draw(self.world_frame)
-
-        for lv in self.levers:
-            color = (0, 200, 0) if lv.on else (200, 0, 0)
-            pygame.draw.rect(self.world_frame, color, lv.rect, 2)
 
         return None
+
 
     def close(self):
         if self._screen is not None:
@@ -636,7 +650,7 @@ class EscapeRoomEnv(gym.Env):
             "current_room": self._current_room_id,
             "lever_on": on_count,
             "lever_required": self.required_levers_on,
-            "goal_unlocked": (on_count == self.required_levers_on),
+            "goal_unlocked": (on_count >= self.required_levers_on),
         }
 
 
