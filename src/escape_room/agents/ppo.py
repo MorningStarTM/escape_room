@@ -236,6 +236,37 @@ class PPO:
         self.policy_old.to(self.device)
         self.policy.to(self.device)
 
+    
+    def decay_lr(self, gamma: float, min_lr: float = 1e-6):
+        """
+        Multiply actor/critic learning rates by gamma (clamped to min_lr).
+        Your optimizer has 2 param_groups:
+        group 0 -> actor lr (lr_actor)
+        group 1 -> critic lr (lr_critic)
+        Returns dict of new lrs for logging.
+        """
+        if self.optimizer is None:
+            return {}
+
+        # Safety: if someone changes param_groups ordering later, this still works
+        out = {}
+
+        # group 0: actor
+        if len(self.optimizer.param_groups) >= 1:
+            pg0 = self.optimizer.param_groups[0]
+            pg0["lr"] = max(min_lr, pg0["lr"] * gamma)
+            out["actor_lr"] = pg0["lr"]
+
+        # group 1: critic
+        if len(self.optimizer.param_groups) >= 2:
+            pg1 = self.optimizer.param_groups[1]
+            pg1["lr"] = max(min_lr, pg1["lr"] * gamma)
+            out["critic_lr"] = pg1["lr"]
+
+        return out
+
+    
+
 
 
 
@@ -258,6 +289,16 @@ class Trainer:
         self.score_history = []
         self.episode_rewards = []   # total reward per episode
         self.step_rewards = []      # reward per step
+        self.best_ep_reward = -float("inf")
+        self.no_improve_epochs = 0
+
+        self.early_stop_patience = config.get("early_stop_patience", 50)  # N episodes
+        self.early_stop_min_delta = config.get("early_stop_min_delta", 0.0)
+
+        self.lr_decay_gamma = config.get("lr_decay_gamma", 0.5)  # multiply lr by this
+        self.min_lr = config.get("min_lr", 1e-6)
+
+        self.stop_training = False
 
         # -----------------------------
         # Common root folder for everything
@@ -365,32 +406,34 @@ class Trainer:
                 # update PPO agent
                 if time_step % self.config['update_timestep'] == 0:
                     self.agent.update()
+                    self.agent.buffer.clear()
 
 
                 # log in logging file
                 if time_step % self.config['log_freq'] == 0:
 
-                    # log average reward till last episode
-                    log_avg_reward = log_running_reward / log_running_episodes
-                    log_avg_reward = round(log_avg_reward, 4)
+                    if log_running_episodes > 0:
+                        log_avg_reward = log_running_reward / log_running_episodes
+                        log_avg_reward = round(log_avg_reward, 4)
+                        log_f.write('{},{},{}\n'.format(i_episode, time_step, log_avg_reward))
+                        log_f.flush()
 
-                    log_f.write('{},{},{}\n'.format(i_episode, time_step, log_avg_reward))
-                    log_f.flush()
-
-                    log_running_reward = 0
-                    log_running_episodes = 0
+                        log_running_reward = 0
+                        log_running_episodes = 0
 
                 # printing average reward
                 if time_step % self.config['print_freq'] == 0:
 
-                    # print average reward till last episode
-                    print_avg_reward = print_running_reward / print_running_episodes
-                    print_avg_reward = round(print_avg_reward, 2)
+                    if print_running_episodes > 0:
+                        print_avg_reward = print_running_reward / print_running_episodes
+                        print_avg_reward = round(print_avg_reward, 2)
 
-                    logger.info("Episode : {} \t\t Timestep : {} \t\t Average Reward : {}".format(i_episode, time_step, print_avg_reward))
+                        logger.info("Episode : {} \t\t Timestep : {} \t\t Average Reward : {}".format(
+                            i_episode, time_step, print_avg_reward
+                        ))
 
-                    print_running_reward = 0
-                    print_running_episodes = 0
+                        print_running_reward = 0
+                        print_running_episodes = 0
 
                 # save model weights
                 if time_step % self.config['save_model_freq'] == 0:
@@ -406,6 +449,30 @@ class Trainer:
                     break
             
             self.episode_rewards.append(current_ep_reward)  
+            if current_ep_reward > (self.best_ep_reward + self.early_stop_min_delta):
+                self.best_ep_reward = current_ep_reward
+                self.no_improve_epochs = 0
+            else:
+                self.no_improve_epochs += 1
+
+            if self.no_improve_epochs >= self.early_stop_patience:
+                lrs = self.agent.decay_lr(self.lr_decay_gamma, self.min_lr)
+
+                logger.info(
+                    f"[CALLBACK] No improvement for {self.no_improve_epochs} eps. "
+                    f"Decayed LR -> {lrs}"
+                )
+
+                # reset counter after decaying (so it can decay again later)
+                self.no_improve_epochs = 0
+
+                # optional hard-stop when LR hits min (stop after decay can’t reduce anymore)
+                lr_vals = list(lrs.values()) if lrs else []
+                if lr_vals and all(lr <= self.min_lr + 1e-12 for lr in lr_vals):
+                    logger.info("[CALLBACK] LR reached min_lr. Stopping training.")
+                    self.stop_training = True
+
+        
             print_running_reward += current_ep_reward
             print_running_episodes += 1
 
@@ -413,6 +480,8 @@ class Trainer:
             log_running_episodes += 1
 
             i_episode += 1
+            if self.stop_training:
+                break
 
         log_f.close()
         self.env.close()
