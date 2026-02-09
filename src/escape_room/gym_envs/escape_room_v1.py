@@ -332,8 +332,8 @@ class EscapeRoomEnv(gym.Env):
             doors_layer_name=self.doors_layer_name,
             door_tiles_layer_name=self.door_tiles_layer_name,
         )
-        print("[DOORS DEBUG] count =", len(self.doors))
-        print("[DOORS DEBUG] goal doors =", [(getattr(d, "is_goal", False), d.blocker_rect) for d in self.doors])
+        # print("[DOORS DEBUG] count =", len(self.doors))
+        # print("[DOORS DEBUG] goal doors =", [(getattr(d, "is_goal", False), d.blocker_rect) for d in self.doors])
 
 
         #print("[DOORS] count =", len(self.doors))
