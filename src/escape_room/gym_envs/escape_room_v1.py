@@ -238,8 +238,26 @@ class EscapeRoomEnv(gym.Env):
             max_dist=self.ray_max_dist,
         )
 
-        # observation: normalized ray distances in [0,1]
-        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(33,), dtype=np.float32)
+        self.max_doors = 12
+        self.max_rooms = 20
+        self.max_levers = 12
+
+        # each entity: (x_norm, y_norm) in [0,1]
+        # plus masks: 1 if valid else 0
+        self.entity_feat_dim = 2
+
+        base_dim = self.n_rays + 2  # rays + goal-relative dx,dy
+
+        doors_dim  = self.max_doors  * self.entity_feat_dim + self.max_doors
+        rooms_dim  = self.max_rooms  * self.entity_feat_dim + self.max_rooms
+        levers_dim = self.max_levers * self.entity_feat_dim + self.max_levers
+        goal_abs_dim = 2
+
+        obs_dim = base_dim + doors_dim + rooms_dim + levers_dim + goal_abs_dim
+
+        self.observation_space = spaces.Box(
+            low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32
+        )
 
 
         # pygame render
@@ -343,6 +361,8 @@ class EscapeRoomEnv(gym.Env):
 
         self.goal_rects = self._load_object_rects_from_tmx(self.tmx_path, self.goal_layer_name)
         self._goal_reached = False
+        if len(self.goal_rects) == 0:
+            raise ValueError(f"No goal rects found in layer '{self.goal_layer_name}' of {self.tmx_path}")
         gr = self.goal_rects[0]
         self.goal_center = pygame.Vector2(gr.centerx, gr.centery)
         #print("[GOAL] rects:", [(r.x, r.y, r.w, r.h) for r in self.goal_rects])
@@ -630,16 +650,68 @@ class EscapeRoomEnv(gym.Env):
         self.ray_sensor.update(origin, facing, obstacles)
 
         # 2) distances -> numpy
-        rays = np.array(self.ray_sensor.distances, dtype=np.float32)  # (31,)
-        rays = rays / float(self.ray_sensor.max_dist)                 # normalize to [0,1]
+        rays = np.array(self.ray_sensor.distances, dtype=np.float32)
+        rays = rays / float(self.ray_sensor.max_dist)
 
-        # 3) goal relative position
         px, py = self.player.rect.centerx, self.player.rect.centery
         dx = (self.goal_center.x - px) / float(self.world_w)
         dy = (self.goal_center.y - py) / float(self.world_h)
 
-        obs = np.concatenate([rays, np.array([dx, dy], dtype=np.float32)], axis=0)
+        base_obs = np.concatenate([rays, np.array([dx, dy], dtype=np.float32)], axis=0)
+
+        # --- NEW: absolute goal position (center) ---
+        gx, gy = self._norm_xy(self.goal_center.x, self.goal_center.y)
+        goal_abs = np.array([gx, gy], dtype=np.float32)
+
+        # --- NEW: doors centers (use blocker_rect center; stable even if open) ---
+        door_centers = []
+        for d in self.doors[:self.max_doors]:
+            cx, cy = d.blocker_rect.centerx, d.blocker_rect.centery
+            door_centers.append(self._norm_xy(cx, cy))
+        doors_pack = self._pack_centers_with_mask(door_centers, self.max_doors)
+
+        # --- NEW: rooms centers ---
+        room_centers = []
+        for r in self.rooms[:self.max_rooms]:
+            cx, cy = r.rect.centerx, r.rect.centery
+            room_centers.append(self._norm_xy(cx, cy))
+        rooms_pack = self._pack_centers_with_mask(room_centers, self.max_rooms)
+
+        # --- NEW: levers centers ---
+        lever_centers = []
+        for lv in self.levers[:self.max_levers]:
+            cx, cy = lv.rect.centerx, lv.rect.centery
+            lever_centers.append(self._norm_xy(cx, cy))
+        levers_pack = self._pack_centers_with_mask(lever_centers, self.max_levers)
+
+        # --- final obs ---
+        obs = np.concatenate([base_obs, doors_pack, rooms_pack, levers_pack, goal_abs], axis=0)
         return obs
+
+
+
+    def _norm_xy(self, x: float, y: float) -> tuple[float, float]:
+        xn = x / float(self.world_w)
+        yn = y / float(self.world_h)
+        return (float(np.clip(xn, 0.0, 1.0)), float(np.clip(yn, 0.0, 1.0)))
+
+
+    def _pack_centers_with_mask(self, centers_xy, max_items: int) -> np.ndarray:
+        """
+        centers_xy: list of (x_norm, y_norm) already normalized to [0,1]
+        output: [x1,y1,x2,y2,..., xN,yN,  m1,m2,...,mN]
+        padded with zeros, masks padded with 0
+        """
+        k = min(len(centers_xy), max_items)
+
+        pos = np.zeros((max_items, 2), dtype=np.float32)
+        mask = np.zeros((max_items,), dtype=np.float32)
+
+        if k > 0:
+            pos[:k, :] = np.array(centers_xy[:k], dtype=np.float32)
+            mask[:k] = 1.0
+
+        return np.concatenate([pos.reshape(-1), mask], axis=0)
 
 
     def _get_info(self) -> Dict[str, Any]:
